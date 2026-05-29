@@ -1,3 +1,5 @@
+import pytest
+
 from mys_crypto import primitives
 
 
@@ -28,3 +30,21 @@ def test_ed25519_rejects_tampered_message():
     priv, pub = primitives.generate_ed25519_keypair()
     sig = primitives.ed25519_sign(priv, b"original")
     assert primitives.ed25519_verify(pub, sig, b"tampered") is False
+
+
+def test_aead_round_trip():
+    key = b"k" * 32
+    nonce = b"n" * 12
+    pt = b"secret payload"
+    aad = b"header"
+    ct = primitives.aead_encrypt(key, nonce, pt, aad)
+    assert ct != pt
+    assert primitives.aead_decrypt(key, nonce, ct, aad) == pt
+
+
+def test_aead_rejects_wrong_aad():
+    key = b"k" * 32
+    nonce = b"n" * 12
+    ct = primitives.aead_encrypt(key, nonce, b"data", b"aad1")
+    with pytest.raises(Exception):
+        primitives.aead_decrypt(key, nonce, ct, b"aad2")

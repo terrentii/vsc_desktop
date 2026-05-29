@@ -1,4 +1,5 @@
 from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
@@ -38,6 +39,14 @@ def generate_ed25519_keypair() -> tuple[bytes, bytes]:
 def ed25519_sign(private_bytes: bytes, message: bytes) -> bytes:
     priv = Ed25519PrivateKey.from_private_bytes(private_bytes)
     return priv.sign(message)
+
+
+def aead_encrypt(key: bytes, nonce: bytes, plaintext: bytes, aad: bytes) -> bytes:
+    return ChaCha20Poly1305(key).encrypt(nonce, plaintext, aad)
+
+
+def aead_decrypt(key: bytes, nonce: bytes, ciphertext: bytes, aad: bytes) -> bytes:
+    return ChaCha20Poly1305(key).decrypt(nonce, ciphertext, aad)
 
 
 def ed25519_verify(public_bytes: bytes, signature: bytes, message: bytes) -> bool:
