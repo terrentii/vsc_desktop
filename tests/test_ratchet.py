@@ -1,3 +1,5 @@
+import pytest
+
 from mys_crypto import ratchet
 from mys_crypto import primitives
 
@@ -80,9 +82,31 @@ def test_ratchet_out_of_order():
 
 
 def test_ratchet_rejects_tampered_ciphertext():
-    import pytest
     alice, bob = _pair()
     hdr, ct = ratchet.ratchet_encrypt(alice, b"intact")
     tampered = bytes([ct[0] ^ 0x01]) + ct[1:]
     with pytest.raises(Exception):
         ratchet.ratchet_decrypt(bob, hdr, tampered)
+
+
+def test_ratchet_recovers_after_tampered_dh_message():
+    alice, bob = _pair()
+    h1, c1 = ratchet.ratchet_encrypt(alice, b"a1")
+    assert ratchet.ratchet_decrypt(bob, h1, c1) == b"a1"
+    # Bob's reply triggers a DH ratchet when Alice decrypts it.
+    h2, c2 = ratchet.ratchet_encrypt(bob, b"b1")
+    tampered = bytes([c2[0] ^ 0x01]) + c2[1:]
+    with pytest.raises(Exception):
+        ratchet.ratchet_decrypt(alice, h2, tampered)
+    # State must be intact: the valid message still decrypts.
+    assert ratchet.ratchet_decrypt(alice, h2, c2) == b"b1"
+
+
+def test_ratchet_exceeding_max_skip_raises():
+    alice, bob = _pair()
+    last = None
+    for i in range(ratchet.MAX_SKIP + 2):
+        last = ratchet.ratchet_encrypt(alice, f"m{i}".encode())
+    hdr, ct = last  # n == MAX_SKIP + 1, requires skipping > MAX_SKIP
+    with pytest.raises(ValueError):
+        ratchet.ratchet_decrypt(bob, hdr, ct)

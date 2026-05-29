@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import hmac
 from dataclasses import dataclass
@@ -81,6 +82,13 @@ def ratchet_encrypt(state: RatchetState, plaintext: bytes, ad: bytes = b"") -> t
 
 
 def ratchet_decrypt(state: RatchetState, header: Header, ciphertext: bytes, ad: bytes = b"") -> bytes:
+    work = copy.deepcopy(state)
+    plaintext = _ratchet_decrypt_into(work, header, ciphertext, ad)
+    _commit(state, work)
+    return plaintext
+
+
+def _ratchet_decrypt_into(state: RatchetState, header: Header, ciphertext: bytes, ad: bytes) -> bytes:
     skipped = _try_skipped(state, header, ciphertext, ad)
     if skipped is not None:
         return skipped
@@ -92,6 +100,18 @@ def ratchet_decrypt(state: RatchetState, header: Header, ciphertext: bytes, ad: 
     state.nr += 1
     key, nonce = derive_message_keys(mk)
     return aead_decrypt(key, nonce, ciphertext, ad + header.serialize())
+
+
+def _commit(state: RatchetState, work: RatchetState) -> None:
+    state.dhs = work.dhs
+    state.dhr = work.dhr
+    state.rk = work.rk
+    state.cks = work.cks
+    state.ckr = work.ckr
+    state.ns = work.ns
+    state.nr = work.nr
+    state.pn = work.pn
+    state.mkskipped = work.mkskipped
 
 
 def _try_skipped(state: RatchetState, header: Header, ciphertext: bytes, ad: bytes) -> bytes | None:
