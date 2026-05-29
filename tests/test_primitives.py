@@ -1,4 +1,5 @@
 import pytest
+from cryptography.exceptions import InvalidTag
 
 from mys_crypto import primitives
 
@@ -46,7 +47,7 @@ def test_aead_rejects_wrong_aad():
     key = b"k" * 32
     nonce = b"n" * 12
     ct = primitives.aead_encrypt(key, nonce, b"data", b"aad1")
-    with pytest.raises(Exception):
+    with pytest.raises(InvalidTag):
         primitives.aead_decrypt(key, nonce, ct, b"aad2")
 
 
@@ -58,6 +59,12 @@ def test_hkdf_deterministic_and_length():
     assert len(out1) == 64
     out3 = primitives.hkdf(ikm, 64, salt=b"salt", info=b"other")
     assert out3 != out1
+
+
+def test_ed25519_verify_rejects_malformed_public_key():
+    priv, _ = primitives.generate_ed25519_keypair()
+    sig = primitives.ed25519_sign(priv, b"msg")
+    assert primitives.ed25519_verify(b"too-short", sig, b"msg") is False
 
 
 def test_argon2id_deterministic_and_salt_sensitive():

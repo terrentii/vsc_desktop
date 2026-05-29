@@ -48,6 +48,7 @@ def aead_encrypt(key: bytes, nonce: bytes, plaintext: bytes, aad: bytes) -> byte
 
 
 def aead_decrypt(key: bytes, nonce: bytes, ciphertext: bytes, aad: bytes) -> bytes:
+    """Decrypt and verify. Raises cryptography.exceptions.InvalidTag on authentication failure."""
     return ChaCha20Poly1305(key).decrypt(nonce, ciphertext, aad)
 
 
@@ -80,9 +81,9 @@ def argon2id(
 
 
 def ed25519_verify(public_bytes: bytes, signature: bytes, message: bytes) -> bool:
-    pub = Ed25519PublicKey.from_public_bytes(public_bytes)
     try:
+        pub = Ed25519PublicKey.from_public_bytes(public_bytes)
         pub.verify(signature, message)
         return True
-    except InvalidSignature:
+    except (InvalidSignature, ValueError):
         return False
