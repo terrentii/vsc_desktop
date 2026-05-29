@@ -2,13 +2,14 @@
 
 import base64
 import os
+import time
 
 import sqlcipher3
 
 from mys_crypto.secure import SecureBytes
 
 from . import kdf, migrations, sidecar
-from .errors import VaultExists, WrongPassword
+from .errors import VaultExists, VaultLocked, WrongPassword
 from .repositories import (
     ContactsRepo,
     ConversationsRepo,
@@ -43,6 +44,19 @@ def _verify(conn) -> bool:
         return True
     except sqlcipher3.DatabaseError:
         return False
+
+
+_LOCK_CAP = 300.0  # секунд
+
+
+def _delay_for(failed: int) -> float:
+    return min(2.0 ** failed, _LOCK_CAP)
+
+
+def _register_failure(meta: dict, meta_path: str) -> None:
+    meta["attempts"]["failed"] += 1
+    meta["attempts"]["lockout_until"] = time.time() + _delay_for(meta["attempts"]["failed"])
+    sidecar.write_sidecar(meta_path, meta)
 
 
 class Vault:
@@ -81,6 +95,12 @@ def create_vault(db_path: str, password: bytes, *, params: dict | None = None) -
 def open_vault(db_path: str, password: bytes) -> Vault:
     meta_path = _meta_path(db_path)
     meta = sidecar.read_sidecar(meta_path)
+
+    lock = meta["attempts"]["lockout_until"]
+    now = time.time()
+    if lock and now < lock:
+        raise VaultLocked(lock - now)
+
     salt = base64.b64decode(meta["kdf"]["salt"])
     key = kdf.derive_db_key(password, salt, **_kdf_kwargs(meta))
     conn = sqlcipher3.connect(db_path)
@@ -88,5 +108,10 @@ def open_vault(db_path: str, password: bytes) -> Vault:
     if not _verify(conn):
         conn.close()
         key.wipe()
+        _register_failure(meta, meta_path)
         raise WrongPassword()
+
+    meta["attempts"]["failed"] = 0
+    meta["attempts"]["lockout_until"] = None
+    sidecar.write_sidecar(meta_path, meta)
     return Vault(conn, db_path, meta, key)

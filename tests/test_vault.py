@@ -1,6 +1,6 @@
 import pytest
 
-from mys_storage import open_vault, create_vault, WrongPassword, VaultExists
+from mys_storage import open_vault, create_vault, WrongPassword, VaultExists, VaultLocked
 
 FAST = {"time_cost": 1, "memory_cost": 8, "parallelism": 1}
 
@@ -41,3 +41,28 @@ def test_db_file_has_no_plaintext(tmp_path):
     raw = open(path, "rb").read()
     assert b"SUPER_SECRET_PLAINTEXT" not in raw
     assert b"SQLite format 3" not in raw  # зашифрованный заголовок
+
+
+def test_wrong_password_increments_and_locks(tmp_path):
+    path = _db(tmp_path)
+    create_vault(path, b"right", params=FAST).close()
+    with pytest.raises(WrongPassword):
+        open_vault(path, b"nope")
+    # сразу повторный вход заблокирован задержкой
+    with pytest.raises(VaultLocked):
+        open_vault(path, b"right")
+
+
+def test_successful_open_resets_attempts(tmp_path, monkeypatch):
+    path = _db(tmp_path)
+    create_vault(path, b"right", params=FAST).close()
+    # нулевая задержка, чтобы блокировка не мешала последовательным попыткам
+    import mys_storage.vault as vault_mod
+    monkeypatch.setattr(vault_mod, "_delay_for", lambda failed: 0.0)
+    with pytest.raises(WrongPassword):
+        open_vault(path, b"nope")
+    with pytest.raises(WrongPassword):
+        open_vault(path, b"nope2")
+    v = open_vault(path, b"right")
+    assert v._meta["attempts"]["failed"] == 0
+    v.close()
