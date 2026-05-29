@@ -6,10 +6,11 @@ dependencies = [
     "cryptography>=42.0",
     "argon2-cffi>=23.1",
     "sqlcipher3-binary>=0.6",
+    "PySide6>=6.11",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "pytest-qt>=4.4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

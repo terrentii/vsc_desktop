@@ -75,6 +75,16 @@ class ConversationsRepo(_Base):
         cur.row_factory = _row_factory
         return cur.fetchone()
 
+    def list(self, mode: str | None = None):
+        if mode is None:
+            cur = self._c.execute("SELECT * FROM conversations ORDER BY id")
+        else:
+            cur = self._c.execute(
+                "SELECT * FROM conversations WHERE mode=? ORDER BY id", (mode,)
+            )
+        cur.row_factory = _row_factory
+        return cur.fetchall()
+
 
 class MessagesRepo(_Base):
     def add(self, conversation_id, *, direction, body, status, wire_seq=None) -> int:
