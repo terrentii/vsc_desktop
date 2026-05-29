@@ -45,3 +45,44 @@ def test_ratchet_init_alice_and_bob():
     assert alice.cks is not None and alice.ckr is None
     assert bob.dhr is None and bob.rk == sk
     assert bob.cks is None and bob.ckr is None
+
+
+def _pair():
+    sk = b"s" * 32
+    bob_priv, bob_pub = primitives.generate_x25519_keypair()
+    alice = ratchet.ratchet_init_alice(sk, bob_pub)
+    bob = ratchet.ratchet_init_bob(sk, (bob_priv, bob_pub))
+    return alice, bob
+
+
+def test_ratchet_single_message():
+    alice, bob = _pair()
+    hdr, ct = ratchet.ratchet_encrypt(alice, b"hello bob")
+    assert ratchet.ratchet_decrypt(bob, hdr, ct) == b"hello bob"
+
+
+def test_ratchet_bidirectional_conversation():
+    alice, bob = _pair()
+    h1, c1 = ratchet.ratchet_encrypt(alice, b"a1")
+    assert ratchet.ratchet_decrypt(bob, h1, c1) == b"a1"
+    h2, c2 = ratchet.ratchet_encrypt(bob, b"b1")
+    assert ratchet.ratchet_decrypt(alice, h2, c2) == b"b1"
+    h3, c3 = ratchet.ratchet_encrypt(alice, b"a2")
+    assert ratchet.ratchet_decrypt(bob, h3, c3) == b"a2"
+
+
+def test_ratchet_out_of_order():
+    alice, bob = _pair()
+    h1, c1 = ratchet.ratchet_encrypt(alice, b"first")
+    h2, c2 = ratchet.ratchet_encrypt(alice, b"second")
+    assert ratchet.ratchet_decrypt(bob, h2, c2) == b"second"
+    assert ratchet.ratchet_decrypt(bob, h1, c1) == b"first"
+
+
+def test_ratchet_rejects_tampered_ciphertext():
+    import pytest
+    alice, bob = _pair()
+    hdr, ct = ratchet.ratchet_encrypt(alice, b"intact")
+    tampered = bytes([ct[0] ^ 0x01]) + ct[1:]
+    with pytest.raises(Exception):
+        ratchet.ratchet_decrypt(bob, hdr, tampered)

@@ -2,7 +2,7 @@ import hashlib
 import hmac
 from dataclasses import dataclass
 
-from .primitives import hkdf, generate_x25519_keypair, x25519_shared
+from .primitives import hkdf, generate_x25519_keypair, x25519_shared, aead_encrypt, aead_decrypt
 
 
 @dataclass
@@ -66,3 +66,59 @@ def ratchet_init_bob(sk: bytes, bob_dh_keypair: tuple[bytes, bytes]) -> RatchetS
         dhs=bob_dh_keypair, dhr=None, rk=sk, cks=None, ckr=None,
         ns=0, nr=0, pn=0, mkskipped={},
     )
+
+
+MAX_SKIP = 1000
+
+
+def ratchet_encrypt(state: RatchetState, plaintext: bytes, ad: bytes = b"") -> tuple[Header, bytes]:
+    state.cks, mk = kdf_ck(state.cks)
+    header = Header(dh=state.dhs[1], pn=state.pn, n=state.ns)
+    state.ns += 1
+    key, nonce = derive_message_keys(mk)
+    ct = aead_encrypt(key, nonce, plaintext, ad + header.serialize())
+    return header, ct
+
+
+def ratchet_decrypt(state: RatchetState, header: Header, ciphertext: bytes, ad: bytes = b"") -> bytes:
+    skipped = _try_skipped(state, header, ciphertext, ad)
+    if skipped is not None:
+        return skipped
+    if header.dh != state.dhr:
+        _skip_message_keys(state, header.pn)
+        _dh_ratchet(state, header)
+    _skip_message_keys(state, header.n)
+    state.ckr, mk = kdf_ck(state.ckr)
+    state.nr += 1
+    key, nonce = derive_message_keys(mk)
+    return aead_decrypt(key, nonce, ciphertext, ad + header.serialize())
+
+
+def _try_skipped(state: RatchetState, header: Header, ciphertext: bytes, ad: bytes) -> bytes | None:
+    key_id = (header.dh, header.n)
+    if key_id not in state.mkskipped:
+        return None
+    mk = state.mkskipped.pop(key_id)
+    key, nonce = derive_message_keys(mk)
+    return aead_decrypt(key, nonce, ciphertext, ad + header.serialize())
+
+
+def _skip_message_keys(state: RatchetState, until: int) -> None:
+    if state.ckr is None:
+        return
+    if state.nr + MAX_SKIP < until:
+        raise ValueError("too many skipped messages")
+    while state.nr < until:
+        state.ckr, mk = kdf_ck(state.ckr)
+        state.mkskipped[(state.dhr, state.nr)] = mk
+        state.nr += 1
+
+
+def _dh_ratchet(state: RatchetState, header: Header) -> None:
+    state.pn = state.ns
+    state.ns = 0
+    state.nr = 0
+    state.dhr = header.dh
+    state.rk, state.ckr = kdf_rk(state.rk, x25519_shared(state.dhs[0], state.dhr))
+    state.dhs = generate_x25519_keypair()
+    state.rk, state.cks = kdf_rk(state.rk, x25519_shared(state.dhs[0], state.dhr))
