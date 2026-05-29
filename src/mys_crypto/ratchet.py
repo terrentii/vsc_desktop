@@ -70,6 +70,7 @@ def ratchet_init_bob(sk: bytes, bob_dh_keypair: tuple[bytes, bytes]) -> RatchetS
 
 
 MAX_SKIP = 1000
+MAX_SKIP_SESSION = 2000
 
 
 def ratchet_encrypt(state: RatchetState, plaintext: bytes, ad: bytes = b"") -> tuple[Header, bytes]:
@@ -130,8 +131,15 @@ def _skip_message_keys(state: RatchetState, until: int) -> None:
         raise ValueError("too many skipped messages")
     while state.nr < until:
         state.ckr, mk = kdf_ck(state.ckr)
-        state.mkskipped[(state.dhr, state.nr)] = mk
+        _store_skipped(state, (state.dhr, state.nr), mk)
         state.nr += 1
+
+
+def _store_skipped(state: RatchetState, key_id: tuple[bytes, int], mk: bytes) -> None:
+    state.mkskipped[key_id] = mk
+    while len(state.mkskipped) > MAX_SKIP_SESSION:
+        oldest = next(iter(state.mkskipped))
+        del state.mkskipped[oldest]
 
 
 def _dh_ratchet(state: RatchetState, header: Header) -> None:

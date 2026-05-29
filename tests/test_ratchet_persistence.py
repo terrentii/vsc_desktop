@@ -44,3 +44,18 @@ def test_serialized_state_preserves_skipped_keys():
     bob = ratchet.deserialize_state(ratchet.serialize_state(bob))
     assert len(bob.mkskipped) == 1
     assert envelope.open_(bob, tkey, b1) == b"m1"
+
+
+def test_global_skip_cap_evicts_oldest(monkeypatch):
+    monkeypatch.setattr(ratchet, "MAX_SKIP_SESSION", 5)
+    alice, bob, tkey = _pair()
+    blobs = [envelope.seal(alice, tkey, f"m{i}".encode()) for i in range(8)]
+    # доставляем последнее -> Боб пропускает ключи m0..m6 (7 шт.), кап = 5
+    assert envelope.open_(bob, tkey, blobs[7]) == b"m7"
+    assert len(bob.mkskipped) == 5
+    # старейшие (m0, m1) вытеснены -> не расшифровать
+    import pytest
+    with pytest.raises(Exception):
+        envelope.open_(bob, tkey, blobs[0])
+    # сохранившиеся (например m6) -> расшифровываются
+    assert envelope.open_(bob, tkey, blobs[6]) == b"m6"
