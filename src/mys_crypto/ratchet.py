@@ -142,3 +142,70 @@ def _dh_ratchet(state: RatchetState, header: Header) -> None:
     state.rk, state.ckr = kdf_rk(state.rk, x25519_shared(state.dhs[0], state.dhr))
     state.dhs = generate_x25519_keypair()
     state.rk, state.cks = kdf_rk(state.rk, x25519_shared(state.dhs[0], state.dhr))
+
+
+_STATE_VERSION = 1
+
+
+def _put_opt(buf: bytearray, value: bytes | None) -> None:
+    if value is None:
+        buf.append(0)
+    else:
+        buf.append(1)
+        buf += value
+
+
+def _get_opt(mv: memoryview, pos: int) -> tuple[bytes | None, int]:
+    flag = mv[pos]
+    pos += 1
+    if flag == 0:
+        return None, pos
+    value = bytes(mv[pos:pos + 32])
+    return value, pos + 32
+
+
+def serialize_state(state: RatchetState) -> bytes:
+    buf = bytearray()
+    buf.append(_STATE_VERSION)
+    buf += state.dhs[0]
+    buf += state.dhs[1]
+    _put_opt(buf, state.dhr)
+    buf += state.rk
+    _put_opt(buf, state.cks)
+    _put_opt(buf, state.ckr)
+    buf += state.ns.to_bytes(4, "big")
+    buf += state.nr.to_bytes(4, "big")
+    buf += state.pn.to_bytes(4, "big")
+    buf += len(state.mkskipped).to_bytes(4, "big")
+    for (dh, n), mk in state.mkskipped.items():
+        buf += dh
+        buf += n.to_bytes(4, "big")
+        buf += mk
+    return bytes(buf)
+
+
+def deserialize_state(blob: bytes) -> RatchetState:
+    mv = memoryview(blob)
+    if mv[0] != _STATE_VERSION:
+        raise ValueError("unsupported ratchet state version")
+    pos = 1
+    dhs_priv = bytes(mv[pos:pos + 32]); pos += 32
+    dhs_pub = bytes(mv[pos:pos + 32]); pos += 32
+    dhr, pos = _get_opt(mv, pos)
+    rk = bytes(mv[pos:pos + 32]); pos += 32
+    cks, pos = _get_opt(mv, pos)
+    ckr, pos = _get_opt(mv, pos)
+    ns = int.from_bytes(mv[pos:pos + 4], "big"); pos += 4
+    nr = int.from_bytes(mv[pos:pos + 4], "big"); pos += 4
+    pn = int.from_bytes(mv[pos:pos + 4], "big"); pos += 4
+    count = int.from_bytes(mv[pos:pos + 4], "big"); pos += 4
+    mkskipped: dict[tuple[bytes, int], bytes] = {}
+    for _ in range(count):
+        dh = bytes(mv[pos:pos + 32]); pos += 32
+        n = int.from_bytes(mv[pos:pos + 4], "big"); pos += 4
+        mk = bytes(mv[pos:pos + 32]); pos += 32
+        mkskipped[(dh, n)] = mk
+    return RatchetState(
+        dhs=(dhs_priv, dhs_pub), dhr=dhr, rk=rk, cks=cks, ckr=ckr,
+        ns=ns, nr=nr, pn=pn, mkskipped=mkskipped,
+    )
