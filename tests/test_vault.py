@@ -111,3 +111,39 @@ def test_change_password_wrong_old_raises(tmp_path):
     with pytest.raises(WrongPassword):
         v.change_password(b"WRONG", b"new-pass")
     v.close()
+
+
+from mys_crypto import ratchet, primitives
+
+
+def test_receive_message_atomic(tmp_path):
+    path = _db(tmp_path)
+    v = create_vault(path, b"pw", params=FAST)
+    conv = v.conversations.add(mode="decentralized")
+    sk = b"s" * 32
+    bob_priv, bob_pub = primitives.generate_x25519_keypair()
+    bob = ratchet.ratchet_init_bob(sk, (bob_priv, bob_pub))
+    v.ratchet.save_state(conv, bob)
+    # имитируем доставку: обновлённое состояние + тело — одной операцией
+    bob.ns = 7  # любое наблюдаемое изменение состояния
+    mid = v.receive_message(conv, body=b"incoming", new_state=bob)
+    assert v.messages.list(conv)[0]["body"] == b"incoming"
+    assert v.ratchet.load_state(conv).ns == 7
+    assert mid > 0
+    v.close()
+
+
+def test_receive_message_rolls_back_on_error(tmp_path):
+    path = _db(tmp_path)
+    v = create_vault(path, b"pw", params=FAST)
+    conv = v.conversations.add(mode="decentralized")
+    sk = b"s" * 32
+    bob_priv, bob_pub = primitives.generate_x25519_keypair()
+    bob = ratchet.ratchet_init_bob(sk, (bob_priv, bob_pub))
+    v.ratchet.save_state(conv, bob)
+    # передаём заведомо плохое состояние (None) -> транзакция должна откатиться
+    with pytest.raises(Exception):
+        v.receive_message(conv, body=b"bad", new_state=None)
+    assert v.messages.list(conv) == []          # сообщение не сохранилось
+    assert v.ratchet.load_state(conv).ns == 0    # состояние не изменилось
+    v.close()

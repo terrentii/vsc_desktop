@@ -6,6 +6,7 @@ import time
 
 import sqlcipher3
 
+from mys_crypto import ratchet as _ratchet
 from mys_crypto.secure import SecureBytes
 
 from . import kdf, migrations, sidecar
@@ -103,6 +104,23 @@ class Vault:
         sidecar.write_sidecar(self._meta_path, self._meta)
         self._key.wipe()
         self._key = new_key
+
+    def receive_message(self, conversation_id: int, *, body: bytes, new_state, wire_seq=None) -> int:
+        blob = _ratchet.serialize_state(new_state)  # сериализуем ДО транзакции (упадёт раньше записи)
+        now = time.time()
+        with self._conn:  # атомарно: commit при успехе, rollback при исключении
+            cur = self._conn.execute(
+                "INSERT INTO messages(conversation_id, direction, body, status, wire_seq, received_at)"
+                " VALUES(?,?,?,?,?,?)",
+                (conversation_id, "in", body, "received", wire_seq, now),
+            )
+            self._conn.execute(
+                "INSERT INTO ratchet_state(conversation_id, state_blob, updated_at) VALUES(?,?,?)"
+                " ON CONFLICT(conversation_id) DO UPDATE SET state_blob=excluded.state_blob,"
+                " updated_at=excluded.updated_at",
+                (conversation_id, blob, now),
+            )
+            return cur.lastrowid
 
     def close(self) -> None:
         self._conn.close()
