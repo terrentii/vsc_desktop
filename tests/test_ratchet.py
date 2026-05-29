@@ -22,3 +22,14 @@ def test_kdf_ck_advances():
 def test_derive_message_keys_shapes():
     key, nonce = ratchet.derive_message_keys(b"m" * 32)
     assert len(key) == 32 and len(nonce) == 12
+
+
+def test_header_serialize_round_trip():
+    dh = b"p" * 32
+    h = ratchet.Header(dh=dh, pn=5, n=42)
+    blob = h.serialize()
+    assert len(blob) == 40
+    restored = ratchet.Header.deserialize(blob)
+    assert restored.dh == dh
+    assert restored.pn == 5
+    assert restored.n == 42

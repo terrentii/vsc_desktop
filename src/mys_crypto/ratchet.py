@@ -1,7 +1,26 @@
 import hashlib
 import hmac
+from dataclasses import dataclass
 
 from .primitives import hkdf
+
+
+@dataclass
+class Header:
+    dh: bytes
+    pn: int
+    n: int
+
+    def serialize(self) -> bytes:
+        return self.dh + self.pn.to_bytes(4, "big") + self.n.to_bytes(4, "big")
+
+    @classmethod
+    def deserialize(cls, blob: bytes) -> "Header":
+        return cls(
+            dh=blob[:32],
+            pn=int.from_bytes(blob[32:36], "big"),
+            n=int.from_bytes(blob[36:40], "big"),
+        )
 
 
 def kdf_rk(rk: bytes, dh_out: bytes) -> tuple[bytes, bytes]:
