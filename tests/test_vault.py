@@ -88,3 +88,26 @@ def test_duress_wipe_destroys_vault(tmp_path, monkeypatch):
     import os
     assert not os.path.exists(path)
     assert not os.path.exists(path + ".meta.json")
+
+
+def test_change_password(tmp_path):
+    path = _db(tmp_path)
+    v = create_vault(path, b"old-pass", params=FAST)
+    v.settings.set("k", b"v")
+    v.change_password(b"old-pass", b"new-pass")
+    v.close()
+    # новый пароль открывает БД и видит прежние данные
+    v2 = open_vault(path, b"new-pass")
+    assert v2.settings.get("k") == b"v"
+    v2.close()
+    # старый пароль больше не подходит
+    with pytest.raises(WrongPassword):
+        open_vault(path, b"old-pass")
+
+
+def test_change_password_wrong_old_raises(tmp_path):
+    path = _db(tmp_path)
+    v = create_vault(path, b"old-pass", params=FAST)
+    with pytest.raises(WrongPassword):
+        v.change_password(b"WRONG", b"new-pass")
+    v.close()

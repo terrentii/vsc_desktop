@@ -88,6 +88,22 @@ class Vault:
         self.messages = MessagesRepo(conn)
         self.ratchet = RatchetRepo(conn)
 
+    def change_password(self, old_password: bytes, new_password: bytes) -> None:
+        salt = base64.b64decode(self._meta["kdf"]["salt"])
+        check = kdf.derive_db_key(old_password, salt, **_kdf_kwargs(self._meta))
+        if check.hex() != self._key.hex():
+            check.wipe()
+            raise WrongPassword()
+        check.wipe()
+
+        new_salt = os.urandom(sidecar.SALT_LEN)
+        new_key = kdf.derive_db_key(new_password, new_salt, **_kdf_kwargs(self._meta))
+        self._conn.execute(f"PRAGMA rekey = \"x'{new_key.hex()}'\"")
+        self._meta["kdf"]["salt"] = base64.b64encode(new_salt).decode()
+        sidecar.write_sidecar(self._meta_path, self._meta)
+        self._key.wipe()
+        self._key = new_key
+
     def close(self) -> None:
         self._conn.close()
         self._key.wipe()
