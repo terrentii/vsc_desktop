@@ -1,4 +1,5 @@
 from mys_crypto import ratchet
+from mys_crypto import primitives
 
 
 def test_kdf_rk_shapes_and_determinism():
@@ -33,3 +34,14 @@ def test_header_serialize_round_trip():
     assert restored.dh == dh
     assert restored.pn == 5
     assert restored.n == 42
+
+
+def test_ratchet_init_alice_and_bob():
+    sk = b"s" * 32
+    bob_priv, bob_pub = primitives.generate_x25519_keypair()
+    alice = ratchet.ratchet_init_alice(sk, bob_pub)
+    bob = ratchet.ratchet_init_bob(sk, (bob_priv, bob_pub))
+    assert alice.dhr == bob_pub
+    assert alice.cks is not None and alice.ckr is None
+    assert bob.dhr is None and bob.rk == sk
+    assert bob.cks is None and bob.ckr is None

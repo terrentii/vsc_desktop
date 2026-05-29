@@ -2,7 +2,7 @@ import hashlib
 import hmac
 from dataclasses import dataclass
 
-from .primitives import hkdf
+from .primitives import hkdf, generate_x25519_keypair, x25519_shared
 
 
 @dataclass
@@ -37,3 +37,32 @@ def kdf_ck(ck: bytes) -> tuple[bytes, bytes]:
 def derive_message_keys(mk: bytes) -> tuple[bytes, bytes]:
     out = hkdf(mk, 44, salt=bytes(32), info=b"mys-ratchet-msg")
     return out[:32], out[32:44]
+
+
+@dataclass
+class RatchetState:
+    dhs: tuple[bytes, bytes]
+    dhr: bytes | None
+    rk: bytes
+    cks: bytes | None
+    ckr: bytes | None
+    ns: int
+    nr: int
+    pn: int
+    mkskipped: dict[tuple[bytes, int], bytes]
+
+
+def ratchet_init_alice(sk: bytes, bob_dh_pub: bytes) -> RatchetState:
+    dhs = generate_x25519_keypair()
+    rk, cks = kdf_rk(sk, x25519_shared(dhs[0], bob_dh_pub))
+    return RatchetState(
+        dhs=dhs, dhr=bob_dh_pub, rk=rk, cks=cks, ckr=None,
+        ns=0, nr=0, pn=0, mkskipped={},
+    )
+
+
+def ratchet_init_bob(sk: bytes, bob_dh_keypair: tuple[bytes, bytes]) -> RatchetState:
+    return RatchetState(
+        dhs=bob_dh_keypair, dhr=None, rk=sk, cks=None, ckr=None,
+        ns=0, nr=0, pn=0, mkskipped={},
+    )
