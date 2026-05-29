@@ -1,6 +1,8 @@
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from argon2.low_level import Type, hash_secret_raw
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
@@ -47,6 +49,34 @@ def aead_encrypt(key: bytes, nonce: bytes, plaintext: bytes, aad: bytes) -> byte
 
 def aead_decrypt(key: bytes, nonce: bytes, ciphertext: bytes, aad: bytes) -> bytes:
     return ChaCha20Poly1305(key).decrypt(nonce, ciphertext, aad)
+
+
+def hkdf(ikm: bytes, length: int, salt: bytes, info: bytes) -> bytes:
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=length,
+        salt=salt,
+        info=info,
+    ).derive(ikm)
+
+
+def argon2id(
+    password: bytes,
+    salt: bytes,
+    length: int,
+    time_cost: int = 3,
+    memory_cost: int = 65536,
+    parallelism: int = 4,
+) -> bytes:
+    return hash_secret_raw(
+        secret=password,
+        salt=salt,
+        time_cost=time_cost,
+        memory_cost=memory_cost,
+        parallelism=parallelism,
+        hash_len=length,
+        type=Type.ID,
+    )
 
 
 def ed25519_verify(public_bytes: bytes, signature: bytes, message: bytes) -> bool:
