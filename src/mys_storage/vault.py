@@ -53,8 +53,23 @@ def _delay_for(failed: int) -> float:
     return min(2.0 ** failed, _LOCK_CAP)
 
 
-def _register_failure(meta: dict, meta_path: str) -> None:
+def _wipe_files(db_path: str, meta_path: str) -> None:
+    for p in (db_path, meta_path):
+        if os.path.exists(p):
+            with open(p, "r+b") as fh:
+                length = os.fstat(fh.fileno()).st_size
+                fh.write(b"\x00" * length)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.remove(p)
+
+
+def _register_failure(meta: dict, db_path: str, meta_path: str) -> None:
     meta["attempts"]["failed"] += 1
+    duress = meta["duress"]
+    if duress["wipe_enabled"] and meta["attempts"]["failed"] >= duress["threshold"]:
+        _wipe_files(db_path, meta_path)
+        return
     meta["attempts"]["lockout_until"] = time.time() + _delay_for(meta["attempts"]["failed"])
     sidecar.write_sidecar(meta_path, meta)
 
@@ -108,7 +123,7 @@ def open_vault(db_path: str, password: bytes) -> Vault:
     if not _verify(conn):
         conn.close()
         key.wipe()
-        _register_failure(meta, meta_path)
+        _register_failure(meta, db_path, meta_path)
         raise WrongPassword()
 
     meta["attempts"]["failed"] = 0

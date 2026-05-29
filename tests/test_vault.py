@@ -66,3 +66,25 @@ def test_successful_open_resets_attempts(tmp_path, monkeypatch):
     v = open_vault(path, b"right")
     assert v._meta["attempts"]["failed"] == 0
     v.close()
+
+
+def test_duress_wipe_destroys_vault(tmp_path, monkeypatch):
+    path = _db(tmp_path)
+    v = create_vault(path, b"right", params={**FAST})
+    # включаем duress с порогом 2
+    v._meta["duress"] = {"wipe_enabled": True, "threshold": 2}
+    from mys_storage import sidecar as sc
+    sc.write_sidecar(path + ".meta.json", v._meta)
+    v.close()
+
+    import mys_storage.vault as vault_mod
+    monkeypatch.setattr(vault_mod, "_delay_for", lambda failed: 0.0)
+
+    with pytest.raises(WrongPassword):
+        open_vault(path, b"x")
+    with pytest.raises(WrongPassword):
+        open_vault(path, b"y")  # достигнут порог -> wipe
+
+    import os
+    assert not os.path.exists(path)
+    assert not os.path.exists(path + ".meta.json")
