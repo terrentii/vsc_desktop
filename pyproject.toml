@@ -5,6 +5,7 @@ requires-python = ">=3.13"
 dependencies = [
     "cryptography>=42.0",
     "argon2-cffi>=23.1",
+    "sqlcipher3-binary>=0.6",
 ]
 
 [project.optional-dependencies]
