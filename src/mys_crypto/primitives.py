@@ -1,4 +1,9 @@
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
 from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PrivateKey,
     X25519PublicKey,
@@ -21,3 +26,24 @@ def x25519_shared(private_bytes: bytes, peer_public_bytes: bytes) -> bytes:
     priv = X25519PrivateKey.from_private_bytes(private_bytes)
     peer = X25519PublicKey.from_public_bytes(peer_public_bytes)
     return priv.exchange(peer)
+
+
+def generate_ed25519_keypair() -> tuple[bytes, bytes]:
+    priv = Ed25519PrivateKey.generate()
+    priv_bytes = priv.private_bytes(_RAW, _PRIV_RAW, _NOENC)
+    pub_bytes = priv.public_key().public_bytes(_RAW, _PUB_RAW)
+    return priv_bytes, pub_bytes
+
+
+def ed25519_sign(private_bytes: bytes, message: bytes) -> bytes:
+    priv = Ed25519PrivateKey.from_private_bytes(private_bytes)
+    return priv.sign(message)
+
+
+def ed25519_verify(public_bytes: bytes, signature: bytes, message: bytes) -> bool:
+    pub = Ed25519PublicKey.from_public_bytes(public_bytes)
+    try:
+        pub.verify(signature, message)
+        return True
+    except InvalidSignature:
+        return False

@@ -15,3 +15,16 @@ def test_x25519_keys_are_random():
     _, pub1 = primitives.generate_x25519_keypair()
     _, pub2 = primitives.generate_x25519_keypair()
     assert pub1 != pub2
+
+
+def test_ed25519_sign_verify():
+    priv, pub = primitives.generate_ed25519_keypair()
+    msg = b"mys message"
+    sig = primitives.ed25519_sign(priv, msg)
+    assert primitives.ed25519_verify(pub, sig, msg) is True
+
+
+def test_ed25519_rejects_tampered_message():
+    priv, pub = primitives.generate_ed25519_keypair()
+    sig = primitives.ed25519_sign(priv, b"original")
+    assert primitives.ed25519_verify(pub, sig, b"tampered") is False
