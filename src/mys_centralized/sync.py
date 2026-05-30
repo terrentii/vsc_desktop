@@ -126,8 +126,8 @@ class SyncEngine:
                 if pending["wire_seq"] is None:
                     self._vault.messages.mark_sent(pending["id"], wire_seq=msg.id)
                 return None
-        local_id = self._vault.receive_message(
-            conv_id, body=msg.body.encode("utf-8"), direction="in",
+        local_id = self._vault.messages.add(
+            conv_id, direction="in", body=msg.body.encode("utf-8"),
             status="received", wire_seq=msg.id,
         )
         if self._on_message is not None:
