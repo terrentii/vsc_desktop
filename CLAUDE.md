@@ -121,8 +121,12 @@
    интеграция в контроллер. Спека/план:
    `docs/superpowers/specs/2026-05-30-decentralized.md`,
    `docs/superpowers/plans/2026-05-30-decentralized.md`.
-5. **Серверные доработки** (rendezvous + relay в `vsc_web`). `rendezvous_server.py` —
-   референс протокола кадров для переноса без изменений семантики.
+5. **Серверные доработки** (rendezvous + relay в `vsc_web`). Транспорт — WebSocket
+   (`wss://soufos.ru/p2p`). Самодостаточная инструкция для агента в `vsc_web`:
+   `docs/superpowers/specs/2026-05-30-server-rendezvous-relay.md` (точный wire-протокол,
+   эталонный модуль на flask-sock, деплой за nginx, тесты). Референс семантики —
+   `src/mys_decentralized/rendezvous_server.py`. Кодеки в инструкции сверены байт-в-байт
+   с клиентским `protocol.py`.
 6. **Централизованный модуль** (зависит от серверных доработок).
 
 ## Разработка
