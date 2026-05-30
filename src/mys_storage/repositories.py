@@ -75,6 +75,16 @@ class ConversationsRepo(_Base):
         cur.row_factory = _row_factory
         return cur.fetchone()
 
+    def get_by_room_id(self, room_id, mode: str | None = None):
+        if mode is None:
+            cur = self._c.execute("SELECT * FROM conversations WHERE room_id=?", (room_id,))
+        else:
+            cur = self._c.execute(
+                "SELECT * FROM conversations WHERE room_id=? AND mode=?", (room_id, mode)
+            )
+        cur.row_factory = _row_factory
+        return cur.fetchone()
+
     def list(self, mode: str | None = None):
         if mode is None:
             cur = self._c.execute("SELECT * FROM conversations ORDER BY id")
@@ -87,12 +97,13 @@ class ConversationsRepo(_Base):
 
 
 class MessagesRepo(_Base):
-    def add(self, conversation_id, *, direction, body, status, wire_seq=None) -> int:
+    def add(self, conversation_id, *, direction, body, status, wire_seq=None,
+            client_msg_id=None) -> int:
         now = time.time()
         cur = self._c.execute(
-            "INSERT INTO messages(conversation_id, direction, body, status, wire_seq, sent_at, received_at)"
-            " VALUES(?,?,?,?,?,?,?)",
-            (conversation_id, direction, body, status, wire_seq,
+            "INSERT INTO messages(conversation_id, direction, body, status, wire_seq,"
+            " client_msg_id, sent_at, received_at) VALUES(?,?,?,?,?,?,?,?)",
+            (conversation_id, direction, body, status, wire_seq, client_msg_id,
              now if direction == "out" else None,
              now if direction == "in" else None),
         )
@@ -108,6 +119,30 @@ class MessagesRepo(_Base):
 
     def set_status(self, message_id: int, status: str) -> None:
         self._c.execute("UPDATE messages SET status=? WHERE id=?", (status, message_id))
+        self._c.commit()
+
+    def exists_wire(self, conversation_id, wire_seq) -> bool:
+        """Есть ли уже сообщение с данным серверным id (wire_seq) в беседе."""
+        row = self._c.execute(
+            "SELECT 1 FROM messages WHERE conversation_id=? AND wire_seq=? LIMIT 1",
+            (conversation_id, wire_seq),
+        ).fetchone()
+        return row is not None
+
+    def find_out_by_client_id(self, conversation_id, client_msg_id):
+        cur = self._c.execute(
+            "SELECT * FROM messages WHERE conversation_id=? AND client_msg_id=?"
+            " AND direction='out'",
+            (conversation_id, client_msg_id),
+        )
+        cur.row_factory = _row_factory
+        return cur.fetchone()
+
+    def mark_sent(self, message_id: int, *, wire_seq, status: str = "sent") -> None:
+        self._c.execute(
+            "UPDATE messages SET wire_seq=?, status=? WHERE id=?",
+            (wire_seq, status, message_id),
+        )
         self._c.commit()
 
 

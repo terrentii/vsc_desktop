@@ -49,6 +49,12 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
         " state_blob BLOB NOT NULL,"
         " updated_at REAL NOT NULL)",
     ]),
+    # v2 — централизованный режим (под-проект №6): идемпотентность исходящих и
+    # дедуп по серверному id (wire_seq хранит серверный message.id).
+    (2, [
+        "ALTER TABLE messages ADD COLUMN client_msg_id TEXT",
+        "CREATE INDEX idx_messages_conv_wire ON messages(conversation_id, wire_seq)",
+    ]),
 ]
 
 TARGET_VERSION = MIGRATIONS[-1][0]
