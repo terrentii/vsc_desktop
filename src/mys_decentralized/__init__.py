@@ -13,6 +13,7 @@ from .errors import (
 from .handshake import HandshakeResult, handshake
 from .rendezvous import Rendezvous, RendezvousClient
 from .rendezvous_server import RendezvousServer
+from .service import P2PService
 from .session import Session, open_session
 from .transport import (
     DirectTransport,
@@ -42,4 +43,5 @@ __all__ = [
     "open_udp_endpoint",
     "Session",
     "open_session",
+    "P2PService",
 ]

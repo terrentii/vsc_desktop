@@ -111,8 +111,18 @@
    `Центр|P2P` + две панели список/чат, минимальная тёмная тема Fusion). Сеть/PAKE/
    ratchet-транспорт — заглушки до под-проекта №4; тесты headless через
    `QT_QPA_PLATFORM=offscreen`. Спека: `docs/superpowers/specs/2026-05-29-ui-shell.md`.
-4. **Децентрализованный модуль** (зависит от крипто-ядра).
-5. **Серверные доработки** (rendezvous + relay в `vsc_web`).
+4. **Децентрализованный модуль** (зависит от крипто-ядра). ✅ Реализовано в
+   `src/mys_decentralized/` и `src/mys_crypto/pake.py`: CPace на ristretto255
+   (libsodium через ctypes, `_ristretto.py`), деривация `room_id`/`prs`, wire-протокол
+   и фрейминг, хендшейк (CPace+key-confirmation → `sk` + init ratchet по роли),
+   транспорт (relay-first через rendezvous + UDP hole-punch на loopback с откатом на
+   relay), тестовый `rendezvous_server`, защищённая сессия (ratchet+envelope с
+   персистом/реконнектом), оркестратор `service.py` (asyncio в фоновом потоке) и
+   интеграция в контроллер. Спека/план:
+   `docs/superpowers/specs/2026-05-30-decentralized.md`,
+   `docs/superpowers/plans/2026-05-30-decentralized.md`.
+5. **Серверные доработки** (rendezvous + relay в `vsc_web`). `rendezvous_server.py` —
+   референс протокола кадров для переноса без изменений семантики.
 6. **Централизованный модуль** (зависит от серверных доработок).
 
 ## Разработка
@@ -137,5 +147,25 @@
   фиксированная публичная биекция (одинаковые байты AEAD-шифротекста на одной позиции
   шифруются одинаково). AEAD это не ослабляет, но транспорт не должен полагаться на
   transform для защиты от анализа трафика.
-- **Вход для ratchet.** `ratchet_init_alice/bob` принимают готовый `sk` и DH-ключи —
-  их должен поставлять PAKE/handshake из децентрализованного под-проекта (№4).
+- ✅ **Вход для ratchet.** Закрыт под-проектом №4: `mys_decentralized.handshake`
+  выводит `sk` и стартовый DH-ключ Боба из `ISK` (CPace) и инициализирует ratchet
+  по роли. `ratchet_init_alice/bob` остаются без изменений.
+- **Порядок отправки в Double Ratchet.** У `RESPONDER` (Bob) `cks=None` до приёма
+  первого сообщения — он не может слать первым (попытка → `kdf_ck(None)`). Первым
+  обязан слать `INITIATOR`. `P2PService.role_of(conv_id)` отдаёт роль. UI должен
+  блокировать/ставить в очередь исходящие у ответчика до первого входящего (или
+  инициатор шлёт авто-«hello» при подключении). Сейчас не обрабатывается на уровне
+  сервиса/контроллера.
+- **Доступ к vault из потоков.** `mys_storage` открывает соединение с
+  `check_same_thread=False` и сериализует доступ общим `RLock` (`_LockedConnection`),
+  чтобы поток UI (чтение) и фоновый поток `P2PService` (запись) делили один Vault.
+
+## Зависимости и тесты под-проекта №4
+
+- **PyNaCl не используется** для ristretto255 (его колесо не экспонирует символы);
+  CPace работает с libsodium напрямую через `ctypes` (`mys_crypto/_ristretto.py`).
+  Требуется системный libsodium ≥1.0.18.
+- **`pytest-asyncio`** (dev) + `asyncio_mode = auto` в **`pytest.ini`** (он перекрывает
+  `[tool.pytest.ini_options]` в `pyproject.toml` — настройки держим в `pytest.ini`).
+- Интеграционные тесты гоняют блокирующие методы сервиса через `asyncio.to_thread`,
+  чтобы не застопорить event loop теста (на нём живёт rendezvous-сервер).

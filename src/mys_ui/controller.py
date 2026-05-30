@@ -20,6 +20,13 @@ class AppController:
         self._kdf = kdf_params
         self.vault: Vault | None = None
         self.mode: str = DECENTRALIZED
+        # P2P-сервис (mys_decentralized.P2PService) подключается извне; без него
+        # децентрализованный режим работает как локальная заглушка (нет сети).
+        self._service = None
+
+    def attach_service(self, service) -> None:
+        """Подключить P2P-сервис для децентрализованного режима."""
+        self._service = service
 
     def vault_exists(self) -> bool:
         return os.path.exists(self._path)
@@ -44,14 +51,22 @@ class AppController:
         return self.vault.conversations.list(self.mode)
 
     def create_conversation(self, title: str, *, room_phrase: str | None = None) -> int:
-        # room_phrase пока не используется (PAKE — под-проект №4); диалог создаётся локально
+        # В децентрализованном режиме с фразой и подключённым сервисом — реальная
+        # P2P-сессия (фраза → PAKE → канал); беседа создаётся/находится по room_id.
+        # Иначе (нет сети/фразы) — локальная заглушка.
+        if self.mode == DECENTRALIZED and room_phrase and self._service is not None:
+            return self._service.start_session(room_phrase)
         return self.vault.conversations.add(mode=self.mode, title=title)
 
     def list_messages(self, conversation_id: int) -> list[dict]:
         return self.vault.messages.list(conversation_id)
 
-    def send_message(self, conversation_id: int, text: str) -> int:
-        # сеть не подключена (№4/№6) — сохраняем исходящее локально
+    def send_message(self, conversation_id: int, text: str) -> int | None:
+        # Активная P2P-сессия — отправляем через сервис (он же персистит исходящее).
+        if self._service is not None and self._service.has_session(conversation_id):
+            self._service.send(conversation_id, text)
+            return None
+        # Иначе (нет сети) — сохраняем исходящее локально.
         return self.vault.messages.add(
             conversation_id, direction="out", body=text.encode("utf-8"), status="local"
         )

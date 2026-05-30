@@ -2,6 +2,7 @@
 
 import base64
 import os
+import threading
 import time
 
 import sqlcipher3
@@ -19,6 +20,55 @@ from .repositories import (
     RatchetRepo,
     SettingsRepo,
 )
+
+
+class _LockedConnection:
+    """Обёртка над соединением SQLCipher: сериализует доступ общим RLock.
+
+    Позволяет делить одно соединение между потоком UI (чтение) и фоновым потоком
+    P2P-сервиса (запись). ``check_same_thread=False`` снимает защитную проверку
+    Python; корректность даёт этот замок (плюс serialized-режим самого sqlite).
+    RLock реентерабелен, так что ``with conn:`` (транзакция) и вложенные
+    ``execute`` внутри неё не дедлочатся.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._lock = threading.RLock()
+
+    def execute(self, *args, **kwargs):
+        with self._lock:
+            return self._conn.execute(*args, **kwargs)
+
+    def executescript(self, *args, **kwargs):
+        with self._lock:
+            return self._conn.executescript(*args, **kwargs)
+
+    def commit(self):
+        with self._lock:
+            return self._conn.commit()
+
+    def close(self):
+        with self._lock:
+            return self._conn.close()
+
+    def __enter__(self):
+        self._lock.acquire()
+        try:
+            self._conn.__enter__()
+        except BaseException:
+            self._lock.release()
+            raise
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            return self._conn.__exit__(exc_type, exc, tb)
+        finally:
+            self._lock.release()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
 
 
 def _meta_path(db_path: str) -> str:
@@ -134,11 +184,11 @@ def create_vault(db_path: str, password: bytes, *, params: dict | None = None) -
     meta = sidecar.new_sidecar(params)
     salt = base64.b64decode(meta["kdf"]["salt"])
     key = kdf.derive_db_key(password, salt, **_kdf_kwargs(meta))
-    conn = sqlcipher3.connect(db_path)
+    conn = sqlcipher3.connect(db_path, check_same_thread=False)
     _apply_key(conn, key)
     migrations.migrate(conn)
     sidecar.write_sidecar(meta_path, meta)
-    return Vault(conn, db_path, meta, key)
+    return Vault(_LockedConnection(conn), db_path, meta, key)
 
 
 def open_vault(db_path: str, password: bytes) -> Vault:
@@ -152,7 +202,7 @@ def open_vault(db_path: str, password: bytes) -> Vault:
 
     salt = base64.b64decode(meta["kdf"]["salt"])
     key = kdf.derive_db_key(password, salt, **_kdf_kwargs(meta))
-    conn = sqlcipher3.connect(db_path)
+    conn = sqlcipher3.connect(db_path, check_same_thread=False)
     _apply_key(conn, key)
     if not _verify(conn):
         conn.close()
@@ -163,4 +213,4 @@ def open_vault(db_path: str, password: bytes) -> Vault:
     meta["attempts"]["failed"] = 0
     meta["attempts"]["lockout_until"] = None
     sidecar.write_sidecar(meta_path, meta)
-    return Vault(conn, db_path, meta, key)
+    return Vault(_LockedConnection(conn), db_path, meta, key)
