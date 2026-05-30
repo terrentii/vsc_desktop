@@ -8,9 +8,15 @@ dependencies = [
     "sqlcipher3-binary>=0.6",
     "PySide6-Essentials>=6.11",
 ]
+# Нативная зависимость (не через pip): libsodium >= 1.0.18 с ristretto255.
+# Используется крипто-ядром (CPace) через ctypes; PyNaCl не подходит — его
+# колесо не экспонирует символы ristretto255. Загрузка: ctypes.util.find_library.
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-qt>=4.4"]
+dev = ["pytest>=8.0", "pytest-qt>=4.4", "pytest-asyncio>=0.23"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# Конфигурация pytest — в pytest.ini (он перекрывает эту секцию, поэтому держим
+# настройки в одном месте: asyncio_mode и пр. там).

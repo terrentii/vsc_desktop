@@ -31,6 +31,17 @@ def x25519_shared(private_bytes: bytes, peer_public_bytes: bytes) -> bytes:
     return priv.exchange(peer)
 
 
+def x25519_keypair_from_seed(seed: bytes) -> tuple[bytes, bytes]:
+    """Детерминированная X25519-пара из 32-байтового seed.
+
+    Нужна хендшейку: обе стороны выводят один и тот же стартовый DH-ключ Боба из
+    общего ISK, без лишних раундов (см. mys_decentralized.handshake)."""
+    priv = X25519PrivateKey.from_private_bytes(seed)
+    priv_bytes = priv.private_bytes(_RAW, _PRIV_RAW, _NOENC)
+    pub_bytes = priv.public_key().public_bytes(_RAW, _PUB_RAW)
+    return priv_bytes, pub_bytes
+
+
 def generate_ed25519_keypair() -> tuple[bytes, bytes]:
     priv = Ed25519PrivateKey.generate()
     priv_bytes = priv.private_bytes(_RAW, _PRIV_RAW, _NOENC)
