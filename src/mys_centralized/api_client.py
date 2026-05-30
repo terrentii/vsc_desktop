@@ -1,0 +1,170 @@
+"""REST-клиент централизованного режима поверх httpx.AsyncClient.
+
+Знает только HTTP-контракт сервера (§5 спеки) и маппинг статусов в типизированные
+ошибки. Ничего не знает о хранилище/UI.
+"""
+
+from __future__ import annotations
+
+import httpx
+
+from .errors import AuthError, NetworkError, ProtocolError, ServerError
+from .models import RemoteMessage, Room, Session
+
+
+class RestClient:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        client: httpx.AsyncClient | None = None,
+        token: str | None = None,
+        timeout: float = 10.0,
+    ):
+        self._base = base_url.rstrip("/")
+        self._owns_client = client is None
+        self._client = client or httpx.AsyncClient(base_url=self._base, timeout=timeout)
+        self._token = token
+
+    @property
+    def token(self) -> str | None:
+        return self._token
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
+
+    # -- внутреннее --------------------------------------------------------
+
+    def _headers(self, *, auth: bool) -> dict[str, str]:
+        if auth and self._token:
+            return {"Authorization": f"Bearer {self._token}"}
+        return {}
+
+    async def _request(self, method, path, *, json=None, params=None, auth=True):
+        try:
+            resp = await self._client.request(
+                method, path, json=json, params=params, headers=self._headers(auth=auth)
+            )
+        except httpx.HTTPError as exc:  # таймаут, обрыв, DNS и т.п.
+            raise NetworkError(str(exc)) from exc
+        if resp.status_code == 401:
+            raise AuthError("unauthorized")
+        if resp.status_code >= 500:
+            raise NetworkError(f"server status {resp.status_code}")
+        if resp.status_code >= 400:
+            raise ServerError(self._error_code(resp) or f"http {resp.status_code}")
+        return resp
+
+    @staticmethod
+    def _error_code(resp: httpx.Response) -> str | None:
+        try:
+            return resp.json().get("error")
+        except Exception:
+            return None
+
+    @staticmethod
+    def _json(resp: httpx.Response):
+        try:
+            return resp.json()
+        except Exception as exc:
+            raise ProtocolError("invalid json in response") from exc
+
+    def _session_from(self, data) -> Session:
+        try:
+            user = data["user"]
+            token = data["token"]
+            sess = Session(
+                server_url=self._base,
+                username=user["username"],
+                user_id=int(user["id"]),
+                token=token,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ProtocolError("malformed auth response") from exc
+        self._token = token
+        return sess
+
+    # -- публичный API -----------------------------------------------------
+
+    async def register(self, username: str, password: str) -> Session:
+        resp = await self._request(
+            "POST", "/api/auth/register",
+            json={"username": username, "password": password}, auth=False,
+        )
+        return self._session_from(self._json(resp))
+
+    async def login(self, username: str, password: str) -> Session:
+        resp = await self._request(
+            "POST", "/api/auth/login",
+            json={"username": username, "password": password}, auth=False,
+        )
+        return self._session_from(self._json(resp))
+
+    async def logout(self) -> None:
+        try:
+            await self._request("POST", "/api/auth/logout")
+        finally:
+            self._token = None
+
+    async def list_rooms(self) -> list[Room]:
+        resp = await self._request("GET", "/api/rooms")
+        data = self._json(resp)
+        try:
+            return [
+                Room(
+                    id=int(r["id"]),
+                    name=r.get("name"),
+                    is_direct=bool(r.get("is_direct", False)),
+                    updated_at=r.get("updated_at"),
+                )
+                for r in data["rooms"]
+            ]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ProtocolError("malformed rooms response") from exc
+
+    async def get_messages(
+        self, room_id: int, *, after: int | None = None, limit: int | None = None
+    ) -> tuple[list[RemoteMessage], int | None]:
+        params: dict[str, int] = {}
+        if after is not None:
+            params["after"] = after
+        if limit is not None:
+            params["limit"] = limit
+        resp = await self._request(
+            "GET", f"/api/rooms/{room_id}/messages", params=params or None
+        )
+        data = self._json(resp)
+        try:
+            msgs = [self._message_from(m, room_id) for m in data["messages"]]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ProtocolError("malformed messages response") from exc
+        next_cursor = data.get("next_cursor")
+        return msgs, (int(next_cursor) if next_cursor is not None else None)
+
+    async def post_message(
+        self, room_id: int, body: str, client_msg_id: str
+    ) -> RemoteMessage:
+        resp = await self._request(
+            "POST", "/api/messages",
+            json={"room_id": room_id, "body": body, "client_msg_id": client_msg_id},
+        )
+        data = self._json(resp)
+        try:
+            msg = self._message_from(data, room_id)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ProtocolError("malformed message response") from exc
+        if msg.client_msg_id is None:
+            msg.client_msg_id = client_msg_id
+        return msg
+
+    @staticmethod
+    def _message_from(item: dict, room_id: int) -> RemoteMessage:
+        return RemoteMessage(
+            id=int(item["id"]),
+            room_id=int(item.get("room_id", room_id)),
+            sender=item["sender"],
+            body=item["body"],
+            created_at=item["created_at"],
+            client_msg_id=item.get("client_msg_id"),
+        )
