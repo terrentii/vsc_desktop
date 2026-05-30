@@ -7,6 +7,7 @@ dependencies = [
     "argon2-cffi>=23.1",
     "sqlcipher3-binary>=0.6",
     "PySide6-Essentials>=6.11",
+    "websockets>=13",
 ]
 # Нативная зависимость (не через pip): libsodium >= 1.0.18 с ristretto255.
 # Используется крипто-ядром (CPace) через ctypes; PyNaCl не подходит — его

@@ -45,7 +45,7 @@ class P2PService:
     def __init__(
         self,
         vault,
-        rendezvous_addr: tuple[str, int],
+        rendezvous_url: str,
         *,
         mode: str = "decentralized",
         on_message: OnMessage | None = None,
@@ -56,7 +56,7 @@ class P2PService:
         allow_direct: bool = True,
     ):
         self._vault = vault
-        self._rv_host, self._rv_port = rendezvous_addr
+        self._rendezvous_url = rendezvous_url
         self._mode = mode
         self._on_message = on_message or _noop
         self._on_state_change = on_state_change or _noop
@@ -159,7 +159,7 @@ class P2PService:
         role = None
         try:
             udp, proto, local = await open_udp_endpoint()
-            rv = await RendezvousClient(self._rv_host, self._rv_port).join(
+            rv = await RendezvousClient(self._rendezvous_url).join(
                 room_id, [local], timeout=self._connect_timeout
             )
             role = rv.role

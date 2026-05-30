@@ -5,12 +5,19 @@
 пира к другому. Слои ``handshake``/``session`` кладут поверх CPace/ratchet/AEAD.
 
 Здесь: ABC ``Transport``, in-memory дуплекс для тестов, ``RelayTransport``
-(relay-first путь через rendezvous-сервер) и ``DirectTransport`` (UDP hole-punch,
-каркас) с выбором пути ``establish_transport`` (direct → fallback на relay).
+(relay-first путь через rendezvous-сервер по WebSocket) и ``DirectTransport``
+(UDP hole-punch, каркас) с выбором пути ``establish_transport`` (direct →
+fallback на relay).
+
+Транспорт rendezvous/relay — WebSocket (один порт с веб-сервером, WSS/прокси-
+дружелюбно): каждый wire-кадр :mod:`.protocol` отправляется как одно бинарное
+WS-сообщение (границы сообщений сохраняет сам WebSocket).
 """
 
 import asyncio
 from abc import ABC, abstractmethod
+
+from websockets.exceptions import ConnectionClosed
 
 from .errors import TransportError
 from .protocol import (
@@ -21,7 +28,6 @@ from .protocol import (
     encode_message,
 )
 
-_HEADER = 6  # u8 type + u8 flags + u32 length (как в protocol)
 _PUNCH_TYPES = frozenset({int(Punch.TYPE), int(PunchAck.TYPE)})
 
 
@@ -81,61 +87,43 @@ class InMemoryTransport(Transport):
 _CLOSED = object()  # сентинел «канал закрыт» во входящей очереди
 
 
-# --- stream-фрейминг (TCP к rendezvous-серверу) ------------------------------
-
-async def read_frame(reader: asyncio.StreamReader) -> bytes:
-    """Прочитать ровно один кадр (заголовок + payload) из потока.
-
-    Бросает :class:`TransportError` на EOF/обрыве — единый тип ошибки транспорта.
-    """
-    try:
-        header = await reader.readexactly(_HEADER)
-        length = int.from_bytes(header[2:6], "big")
-        payload = await reader.readexactly(length) if length else b""
-    except (asyncio.IncompleteReadError, ConnectionError) as exc:
-        raise TransportError("соединение закрыто при чтении кадра") from exc
-    return header + payload
-
-
-async def write_frame(writer: asyncio.StreamWriter, frame: bytes) -> None:
-    try:
-        writer.write(frame)
-        await writer.drain()
-    except ConnectionError as exc:
-        raise TransportError("соединение закрыто при записи кадра") from exc
-
-
-# --- relay-first путь через сервер -------------------------------------------
+# --- relay-first путь через сервер (WebSocket) -------------------------------
 
 class RelayTransport(Transport):
-    """Кадры идут на rendezvous-сервер в ``RELAY{payload}``; сервер пересылает их
-    второму пиру в комнате, **не читая** payload (он уже E2E-защищён)."""
+    """Кадры идут на rendezvous-сервер в ``RELAY{payload}`` одним бинарным
+    WS-сообщением; сервер пересылает их второму пиру в комнате, **не читая**
+    payload (он уже E2E-защищён)."""
 
-    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        self._reader = reader
-        self._writer = writer
+    def __init__(self, ws):
+        self._ws = ws
         self._closed = False
 
     @classmethod
     def from_rendezvous(cls, rv) -> "RelayTransport":
-        """Построить relay-транспорт поверх уже спаренного соединения."""
-        return cls(rv.reader, rv.writer)
+        """Построить relay-транспорт поверх уже спаренного WS-соединения."""
+        return cls(rv.ws)
 
     async def send(self, data: bytes) -> None:
         if self._closed:
             raise TransportError("send в закрытый relay")
-        await write_frame(self._writer, encode_message(Relay(data)))
+        try:
+            await self._ws.send(encode_message(Relay(data)))
+        except ConnectionClosed as exc:
+            raise TransportError("relay-соединение закрыто") from exc
 
     async def recv(self) -> bytes:
-        frame = await read_frame(self._reader)
-        msg, _consumed = decode_message(frame)
+        try:
+            message = await self._ws.recv()
+        except ConnectionClosed as exc:
+            raise TransportError("relay-соединение закрыто") from exc
+        msg, _consumed = decode_message(message)
         if not isinstance(msg, Relay):
             raise TransportError("ожидался RELAY-кадр")
         return msg.payload()
 
     async def close(self) -> None:
         self._closed = True
-        self._writer.close()
+        await self._ws.close()
 
 
 # --- прямой путь: UDP hole-punch (каркас) ------------------------------------

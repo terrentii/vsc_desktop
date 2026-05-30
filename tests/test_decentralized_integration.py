@@ -1,8 +1,8 @@
 """Интеграция: два клиента через тестовый rendezvous обмениваются сообщениями.
 
 Каждый клиент — свой ``P2PService`` (asyncio в фоновом потоке) и свой
-зашифрованный vault. Rendezvous-сервер крутится на event loop теста; сервисы —
-на своих loop'ах в отдельных потоках, общаются по реальным loopback TCP/UDP.
+зашифрованный vault. Rendezvous-сервер (WebSocket) крутится на event loop теста;
+сервисы — на своих loop'ах в отдельных потоках, общаются по loopback (WS + UDP).
 Блокирующие методы сервиса вызываются через ``asyncio.to_thread``, чтобы не
 застопорить loop теста (на нём живёт сервер).
 """
@@ -27,10 +27,10 @@ from mys_storage import create_vault
 FAST = {"time_cost": 1, "memory_cost": 8, "parallelism": 1}
 
 
-async def _start_server() -> tuple[RendezvousServer, str, int]:
+async def _start_server() -> tuple[RendezvousServer, str]:
     server = RendezvousServer()
     host, port = await server.start("127.0.0.1", 0)
-    return server, host, port
+    return server, f"ws://{host}:{port}/p2p"
 
 
 async def _wait_for(pred, timeout: float = 5.0) -> None:
@@ -45,18 +45,18 @@ async def _wait_for(pred, timeout: float = 5.0) -> None:
 
 @pytest.mark.parametrize("allow_direct", [False, True], ids=["relay", "direct"])
 async def test_two_clients_exchange_messages(tmp_path, allow_direct):
-    server, host, port = await _start_server()
+    server, url = await _start_server()
     av = create_vault(str(tmp_path / "a.db"), b"pw-a", params=FAST)
     bv = create_vault(str(tmp_path / "b.db"), b"pw-b", params=FAST)
 
     recv_a: list[bytes] = []
     recv_b: list[bytes] = []
     sa = P2PService(
-        av, (host, port), allow_direct=allow_direct, connect_timeout=3,
+        av, url, allow_direct=allow_direct, connect_timeout=3,
         on_message=lambda _cid, body: recv_a.append(body),
     )
     sb = P2PService(
-        bv, (host, port), allow_direct=allow_direct, connect_timeout=3,
+        bv, url, allow_direct=allow_direct, connect_timeout=3,
         on_message=lambda _cid, body: recv_b.append(body),
     )
     sa.start()
@@ -95,9 +95,9 @@ async def test_two_clients_exchange_messages(tmp_path, allow_direct):
 
 
 async def test_peer_unavailable_when_alone(tmp_path):
-    server, host, port = await _start_server()
+    server, url = await _start_server()
     av = create_vault(str(tmp_path / "a.db"), b"pw", params=FAST)
-    sa = P2PService(av, (host, port), connect_timeout=0.3)
+    sa = P2PService(av, url, connect_timeout=0.3)
     sa.start()
     try:
         with pytest.raises(PeerUnavailable):
@@ -109,11 +109,11 @@ async def test_peer_unavailable_when_alone(tmp_path):
 
 async def test_different_phrases_do_not_connect(tmp_path):
     """Разные фразы ⇒ разные room_id ⇒ клиенты не парятся (peer unavailable)."""
-    server, host, port = await _start_server()
+    server, url = await _start_server()
     av = create_vault(str(tmp_path / "a.db"), b"pw-a", params=FAST)
     bv = create_vault(str(tmp_path / "b.db"), b"pw-b", params=FAST)
-    sa = P2PService(av, (host, port), connect_timeout=0.4)
-    sb = P2PService(bv, (host, port), connect_timeout=0.4)
+    sa = P2PService(av, url, connect_timeout=0.4)
+    sb = P2PService(bv, url, connect_timeout=0.4)
     sa.start()
     sb.start()
     try:
@@ -131,11 +131,11 @@ async def test_different_phrases_do_not_connect(tmp_path):
 
 async def test_mitm_in_room_without_phrase_fails_pake(tmp_path):
     """Атакующий входит в правильную комнату, но без фразы ⇒ honest видит PAKEError."""
-    server, host, port = await _start_server()
+    server, url = await _start_server()
     av = create_vault(str(tmp_path / "a.db"), b"pw", params=FAST)
     errors: list[Exception] = []
     sa = P2PService(
-        av, (host, port), allow_direct=False, connect_timeout=3,
+        av, url, allow_direct=False, connect_timeout=3,
         on_error=lambda _cid, exc: errors.append(exc),
     )
     sa.start()
@@ -144,7 +144,7 @@ async def test_mitm_in_room_without_phrase_fails_pake(tmp_path):
     room_id, _prs = derive_room_params(phrase)
 
     async def attacker() -> None:
-        rv = await RendezvousClient(host, port).join(room_id, [], timeout=3)
+        rv = await RendezvousClient(url).join(room_id, [], timeout=3)
         transport = RelayTransport.from_rendezvous(rv)
         try:
             await handshake(transport, b"attacker-wrong-prs", rv.role)
