@@ -4,10 +4,22 @@ import sys
 
 from PySide6.QtWidgets import QApplication, QStackedWidget
 
+from mys_centralized import CentralizedService
+
 from .controller import AppController
 from .theme import apply_dark_theme
 from .windows.main_window import MainWindow
 from .windows.unlock import UnlockWindow
+
+
+def _central_factory(vault, *, on_message, on_state_change, on_error):
+    """Боевая фабрика: ws_url выводится из server_url входа (см. service)."""
+    return CentralizedService(
+        vault,
+        on_message=on_message,
+        on_state_change=on_state_change,
+        on_error=on_error,
+    )
 
 
 class AppShell(QStackedWidget):
@@ -43,7 +55,7 @@ class AppShell(QStackedWidget):
 def main() -> None:
     app = QApplication(sys.argv)
     apply_dark_theme(app)
-    shell = AppShell(AppController())
+    shell = AppShell(AppController(central_factory=_central_factory))
     shell.resize(900, 600)
     shell.show()
     sys.exit(app.exec())

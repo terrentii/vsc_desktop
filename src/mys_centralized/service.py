@@ -41,12 +41,24 @@ def _default_ws_factory(url: str, token: str) -> WsClient:
     return WsClient(url, token)
 
 
+def _default_ws_url(server_url: str) -> str | None:
+    """Вывести WS-эндпоинт из базового URL сервера (``…/ws``).
+
+    ``https://host`` → ``wss://host/ws``; ``http://host`` → ``ws://host/ws``.
+    Для нераспознанной схемы — ``None`` (live-канал не поднимается)."""
+    for http, ws in (("https://", "wss://"), ("http://", "ws://")):
+        if server_url.startswith(http):
+            return ws + server_url[len(http):].rstrip("/") + "/ws"
+    return None
+
+
 class CentralizedService:
     def __init__(
         self,
         vault,
         *,
         ws_url: str | None = None,
+        ws_url_factory: Callable[[str], str | None] | None = None,
         rest_factory: Callable[..., RestClient] | None = None,
         ws_factory: Callable[[str, str], WsClient] | None = None,
         on_message: OnMessage | None = None,
@@ -55,7 +67,9 @@ class CentralizedService:
         page_limit: int = 200,
     ):
         self._vault = vault
+        # ``ws_url`` — явный override (тесты); иначе выводим из server_url входа.
         self._ws_url = ws_url
+        self._ws_url_factory = ws_url_factory or _default_ws_url
         self._rest_factory = rest_factory or _default_rest_factory
         self._ws_factory = ws_factory or _default_ws_factory
         self._on_message = on_message or _noop
@@ -197,9 +211,12 @@ class CentralizedService:
         self._on_message(conv_id, local_id)
 
     def _start_ws(self) -> None:
-        if self._ws_url is None or self._session is None:
+        if self._session is None:
             return
-        self._ws = self._ws_factory(self._ws_url, self._session.token)
+        url = self._ws_url or self._ws_url_factory(self._session.server_url)
+        if url is None:
+            return  # WS-эндпоинт не определён → работаем без live-канала
+        self._ws = self._ws_factory(url, self._session.token)
         self._ws_task = self._loop.create_task(self._ws_loop(self._ws, self._sync))
 
     async def _ws_loop(self, ws: WsClient, sync: SyncEngine) -> None:
