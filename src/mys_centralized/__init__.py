@@ -12,6 +12,7 @@ from .errors import (
     ServerError,
 )
 from .models import RemoteMessage, Room, Session, SyncCursor
+from .service import CentralizedService
 
 __all__ = [
     "CentralizedError",
@@ -23,4 +24,5 @@ __all__ = [
     "Room",
     "RemoteMessage",
     "SyncCursor",
+    "CentralizedService",
 ]
