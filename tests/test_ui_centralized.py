@@ -4,9 +4,11 @@
 чтобы проверить вход, отображение комнат, отправку и real-time без сервера.
 """
 
+from mys_centralized.account import save_session
 from mys_centralized.errors import AuthError
 from mys_centralized.models import Session
 from mys_ui.controller import CENTRALIZED, AppController
+from mys_ui.windows import main_window
 from mys_ui.windows.main_window import MainWindow
 
 FAST = {"time_cost": 1, "memory_cost": 8, "parallelism": 1}
@@ -47,6 +49,20 @@ class FakeCentral:
         return self.session
 
     def resume(self):
+        # Боевой сервис грузит сессию из vault; имитируем то же + первичный синк.
+        from mys_centralized.account import load_session
+        sess = load_session(self.vault)
+        if sess is None:
+            return None
+        self.session = sess
+        if self.vault.conversations.get_by_room_id(b"1", mode="centralized") is None:
+            conv = self.vault.conversations.add(
+                mode="centralized", room_id=b"1", title="general"
+            )
+            self.vault.messages.add(
+                conv, direction="in", body=b"history", status="received", wire_seq=1
+            )
+        self._on_state_change("synced")
         return self.session
 
     def send_message(self, conversation_id, body):
@@ -156,3 +172,52 @@ def test_lock_stops_central_service(qtbot, tmp_path):
     assert svc.started is True
     c.lock()
     assert svc.started is False
+
+
+class _SyncThread:
+    """Подмена threading.Thread: выполняет тело синхронно при start()."""
+
+    def __init__(self, *, target, **_kw):
+        self._target = target
+
+    def start(self):
+        self._target()
+
+
+def test_auto_resume_restores_saved_session(qtbot, tmp_path, monkeypatch):
+    c, holder = _ready(tmp_path)
+    # Сохранённая сессия в vault — как после прошлого входа.
+    save_session(
+        c.vault,
+        Session(server_url="https://soufos.ru", username="alice", user_id=1, token="tok"),
+    )
+    assert c.central_has_saved_session() is True
+    # Фоновый поток resume выполняем синхронно для детерминизма.
+    monkeypatch.setattr(main_window.threading, "Thread", _SyncThread)
+
+    w = MainWindow(c)  # __init__ → _try_auto_resume → resume
+    qtbot.addWidget(w)
+
+    assert c.central_session() is not None
+    assert holder["svc"].started is True
+    # Переключение в «Центр» НЕ должно открывать форму входа (сессия уже есть).
+    calls = []
+    w._central_login = lambda: calls.append(True)
+    w.top._select(CENTRALIZED)
+    assert calls == []
+    assert w.conversations.list.count() == 1
+    assert w.conversations.list.item(0).text() == "general"
+    c.lock()
+
+
+def test_no_auto_resume_without_saved_session(qtbot, tmp_path, monkeypatch):
+    c, holder = _ready(tmp_path)
+    assert c.central_has_saved_session() is False
+    monkeypatch.setattr(main_window.threading, "Thread", _SyncThread)
+
+    w = MainWindow(c)  # нет сохранённой сессии → resume не запускается
+    qtbot.addWidget(w)
+
+    assert c.central_session() is None
+    assert "svc" not in holder  # сервис даже не создавался
+    c.lock()

@@ -147,6 +147,16 @@ class AppController:
     def central_session(self):
         return self._central.session if self._central is not None else None
 
+    def central_has_saved_session(self) -> bool:
+        """Есть ли сохранённая сессия в vault — БЕЗ запуска фонового сервиса.
+
+        Позволяет решить, нужен ли авто-resume при старте, не поднимая поток/loop
+        сервиса вхолостую при отсутствии сессии."""
+        if self.vault is None:
+            return False
+        from mys_centralized.account import load_session
+        return load_session(self.vault) is not None
+
     def central_login(self, server_url, username, password, *, register=False):
         return self._ensure_central().login(
             server_url, username, password, register=register

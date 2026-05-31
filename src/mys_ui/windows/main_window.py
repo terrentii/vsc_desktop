@@ -1,5 +1,7 @@
 """Главное окно: верхняя панель + две панели (список диалогов / чат)."""
 
+import threading
+
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
@@ -31,6 +33,7 @@ class _CentralBridge(QObject):
     message = Signal(int, int)
     state = Signal(str)
     error = Signal(str)
+    resumed = Signal(bool)
 
 
 class MainWindow(QWidget):
@@ -71,6 +74,7 @@ class MainWindow(QWidget):
         self._bridge.message.connect(self._on_central_message)
         self._bridge.state.connect(self._on_central_state)
         self._bridge.error.connect(self._on_central_error)
+        self._bridge.resumed.connect(self._on_resumed)
         self._c.add_central_observer(
             on_message=lambda cid, lid: self._bridge.message.emit(cid, lid),
             on_state_change=lambda st: self._bridge.state.emit(st),
@@ -78,6 +82,7 @@ class MainWindow(QWidget):
         )
 
         self.refresh_conversations()
+        self._try_auto_resume()
 
     def refresh_conversations(self) -> None:
         self.conversations.populate(self._c.list_conversations())
@@ -118,6 +123,34 @@ class MainWindow(QWidget):
             return False
         self.refresh_conversations()
         return True
+
+    def _try_auto_resume(self) -> None:
+        """При старте восстановить сохранённую централизованную сессию в фоне.
+
+        Без повторного входа: если в vault лежит сессия, поднимаем сервис, синк и
+        live-WS в фоновом потоке (resume() блокирует до конца первичного синка —
+        не держим UI-поток). Нет сессии/фабрики или сессия уже активна → выходим."""
+        if not self._c.central_available() or self._c.central_session() is not None:
+            return
+        if not self._c.central_has_saved_session():
+            return
+        threading.Thread(
+            target=self._resume_worker, name="mys-central-resume", daemon=True
+        ).start()
+
+    def _resume_worker(self) -> None:
+        """Тело фонового потока: resume() и сигнал результата в UI-поток."""
+        ok = False
+        try:
+            ok = self._c.central_resume() is not None
+        except CentralizedError as exc:
+            self._central_error = str(exc)
+        self._bridge.resumed.emit(ok)
+
+    def _on_resumed(self, ok: bool) -> None:
+        # Сессия восстановлена в фоне; если уже в режиме «Центр» — показать комнаты.
+        if ok and self._c.mode == CENTRALIZED:
+            self.refresh_conversations()
 
     # --- выбор/отправка/создание ----------------------------------------------
 
