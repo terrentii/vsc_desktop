@@ -82,6 +82,39 @@ async def test_session_roundtrip_preserves_order(tmp_path):
     await sb.close()
 
 
+async def test_responder_queues_outgoing_until_primed(tmp_path):
+    """RESPONDER (cks=None) не может слать первым: исходящее ждёт в очереди как
+    pending и уходит, как только INITIATOR пришлёт prime."""
+    av, ca, bv, cb = _two_vaults(tmp_path)
+    sk = b"k" * 32
+    a_state, b_state = _seed_states(sk)
+
+    ta, tb = InMemoryTransport.connected_pair()
+    got_a: list[bytes] = []
+    sa = open_session(av, ca, ta, sk, a_state, on_message=got_a.append)  # INITIATOR
+    sb = open_session(bv, cb, tb, sk, b_state)                           # RESPONDER
+    sa.start()
+    sb.start()
+
+    # Bob ещё не может слать.
+    assert sb.can_send is False
+    await sb.send("from-bob")  # → очередь, запись pending
+    await asyncio.sleep(0.05)
+    assert [(m["direction"], m["status"]) for m in bv.messages.list(cb)] == [("out", "pending")]
+    assert got_a == []  # Alice ничего не получила
+
+    # Alice праймит → Bob открывает отправляющую цепочку и флашит очередь.
+    await sa.send_prime()
+    await _wait_for(lambda: got_a == [b"from-bob"])
+    assert sb.can_send is True
+    assert [(m["direction"], m["status"]) for m in bv.messages.list(cb)] == [("out", "sent")]
+    # prime не сохранён как сообщение ни у кого — у Alice только входящее от Bob.
+    assert [m["direction"] for m in av.messages.list(ca)] == ["in"]
+
+    await sa.close()
+    await sb.close()
+
+
 async def test_session_resumes_ratchet_after_reconnect(tmp_path):
     av, ca, bv, cb = _two_vaults(tmp_path)
     sk = b"k" * 32

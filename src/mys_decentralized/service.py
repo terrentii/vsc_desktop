@@ -189,6 +189,14 @@ class P2PService:
             session.start()
             self._sessions[conv_id] = session
             self._roles[conv_id] = role
+            # INITIATOR праймит ratchet ответчика: шлёт первое (служебное) сообщение,
+            # из которого RESPONDER выводит свою отправляющую цепочку (порядок
+            # отправки в Double Ratchet). Best-effort — провал не рушит сессию.
+            if role == Role.INITIATOR:
+                try:
+                    await session.send_prime()
+                except Exception:
+                    pass
             self._on_state_change(conv_id, "connected")
             return conv_id
         except Exception as exc:

@@ -50,6 +50,15 @@ class Session:
         self._lock = asyncio.Lock()  # сериализует доступ к ratchet (send vs recv)
         self._recv_task: asyncio.Task | None = None
         self._running = False
+        # Исходящие, накопленные пока нельзя слать (RESPONDER до первого входящего):
+        # (local_message_id, plaintext). Флашатся, как только появится cks.
+        self._outbox: list[tuple[int, bytes]] = []
+
+    @property
+    def can_send(self) -> bool:
+        """Есть ли отправляющая цепочка ratchet (у RESPONDER появляется только
+        после первого принятого сообщения; см. follow-up порядка отправки)."""
+        return self._state.cks is not None
 
     def start(self) -> None:
         """Запустить фоновый цикл приёма (идемпотентно)."""
@@ -58,15 +67,54 @@ class Session:
             self._recv_task = asyncio.create_task(self._recv_loop())
 
     async def send(self, text: str) -> None:
-        """Зашифровать и отправить ``text``; после успеха — записать и персистить."""
+        """Зашифровать и отправить ``text``; после успеха — записать и персистить.
+
+        Если отправляющая цепочка ещё не готова (RESPONDER не принял первого
+        сообщения), сообщение записывается как ``pending`` и ставится в очередь —
+        будет отправлено автоматически при первом входящем (праймится INITIATOR'ом).
+        """
         data = text.encode("utf-8")
+        if not data:
+            return  # пустой payload зарезервирован под prime — не шлём как контент
         async with self._lock:
-            sealed = envelope.seal(self._state, self._tk, data)
-            await self._transport.send(encode_message(Data(sealed)))
+            if not self.can_send:
+                local_id = self._vault.messages.add(
+                    self._conv, direction="out", body=data, status="pending"
+                )
+                self._outbox.append((local_id, data))
+                return
+            await self._seal_and_send(data)
             self._vault.messages.add(
                 self._conv, direction="out", body=data, status="sent"
             )
             self._vault.ratchet.save_state(self._conv, self._state)
+
+    async def send_prime(self) -> None:
+        """Отправить prime-кадр (пустой payload), чтобы продвинуть ratchet пира.
+
+        Шлёт INITIATOR при подключении: даёт RESPONDER'у первое сообщение, из
+        которого тот выводит свою отправляющую цепочку. Best-effort и не виден в
+        истории. No-op, если своя цепочка ещё не готова."""
+        async with self._lock:
+            if not self.can_send:
+                return
+            await self._seal_and_send(b"")
+            self._vault.ratchet.save_state(self._conv, self._state)
+
+    async def _seal_and_send(self, data: bytes) -> None:
+        """Запечатать payload и отправить в транспорт (вызывать под self._lock)."""
+        sealed = envelope.seal(self._state, self._tk, data)
+        await self._transport.send(encode_message(Data(sealed)))
+
+    async def _flush_outbox_locked(self) -> None:
+        """Отправить накопленные исходящие (вызывать под self._lock, когда есть cks)."""
+        if not self._outbox or not self.can_send:
+            return
+        while self._outbox:
+            local_id, data = self._outbox.pop(0)
+            await self._seal_and_send(data)
+            self._vault.messages.set_status(local_id, "sent")
+        self._vault.ratchet.save_state(self._conv, self._state)
 
     async def _recv_loop(self) -> None:
         try:
@@ -90,11 +138,18 @@ class Session:
                 # битый sealed или replay: ratchet не двинулся (decrypt атомарен),
                 # сессия продолжает работать.
                 return
-            # Атомарно: входящее сообщение + новое состояние ratchet.
-            self._vault.receive_message(
-                self._conv, body=plaintext, new_state=self._state
-            )
-        if self._on_message is not None:
+            if plaintext == b"":
+                # prime-кадр: продвинул наш ratchet (теперь есть cks), но это не
+                # контент — не персистим сообщение, лишь сохраняем состояние.
+                self._vault.ratchet.save_state(self._conv, self._state)
+            else:
+                # Атомарно: входящее сообщение + новое состояние ratchet.
+                self._vault.receive_message(
+                    self._conv, body=plaintext, new_state=self._state
+                )
+            # Первое входящее могло открыть отправляющую цепочку — флашим очередь.
+            await self._flush_outbox_locked()
+        if plaintext != b"" and self._on_message is not None:
             self._on_message(plaintext)
 
     async def close(self) -> None:
