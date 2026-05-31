@@ -1,8 +1,10 @@
-"""Минимальные настройки: смена мастер-пароля."""
+"""Настройки: смена мастер-пароля и аккаунт «Центра»."""
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QFormLayout,
+    QFrame,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -35,6 +37,23 @@ class SettingsDialog(QDialog):
         self.status = QLabel("")
         layout.addWidget(self.status)
 
+        # --- секция «Центр» (только если режим сконфигурирован) ---------------
+        if self._c.central_available():
+            sep = QFrame()
+            sep.setFrameShape(QFrame.HLine)
+            layout.addWidget(sep)
+            layout.addWidget(QLabel("Аккаунт «Центр»"))
+
+            self.wipe_on_logout = QCheckBox("Стирать историю «Центра» при выходе")
+            self.wipe_on_logout.setChecked(self._c.central_wipe_on_logout())
+            self.wipe_on_logout.toggled.connect(self._c.set_central_wipe_on_logout)
+            layout.addWidget(self.wipe_on_logout)
+
+            self.btn_logout = QPushButton("Выйти из аккаунта")
+            self.btn_logout.setEnabled(self._c.central_session() is not None)
+            self.btn_logout.clicked.connect(self._logout)
+            layout.addWidget(self.btn_logout)
+
     def _change(self) -> None:
         try:
             self._c.change_password(
@@ -44,3 +63,8 @@ class SettingsDialog(QDialog):
             self.status.setText("Пароль изменён")
         except WrongPassword:
             self.status.setText("Неверный старый пароль")
+
+    def _logout(self) -> None:
+        self._c.central_logout()
+        self.btn_logout.setEnabled(False)
+        self.status.setText("Выход из «Центра» выполнен")

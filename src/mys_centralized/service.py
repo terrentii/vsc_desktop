@@ -15,7 +15,13 @@ import asyncio
 import threading
 from collections.abc import Callable
 
-from .account import clear_session, load_session, save_session
+from .account import (
+    clear_session,
+    load_session,
+    load_wipe_on_logout,
+    save_session,
+    wipe_local_cache,
+)
 from .api_client import RestClient
 from .errors import AuthError
 from .models import Session
@@ -253,6 +259,8 @@ class CentralizedService:
                 pass  # best-effort — токен всё равно забываем
         await self._teardown_session()  # закроет REST-клиент
         clear_session(self._vault)
+        if load_wipe_on_logout(self._vault):
+            wipe_local_cache(self._vault)  # по настройке стираем локальную историю
 
     async def _teardown_session(self) -> None:
         """Остановить live-WS и закрыть REST, не трогая персист сессии в vault."""

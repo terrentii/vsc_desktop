@@ -8,6 +8,7 @@ from mys_centralized.account import save_session
 from mys_centralized.errors import AuthError
 from mys_centralized.models import Session
 from mys_ui.controller import CENTRALIZED, AppController
+from mys_ui.dialogs.settings import SettingsDialog
 from mys_ui.windows import main_window
 from mys_ui.windows.main_window import MainWindow
 
@@ -64,6 +65,17 @@ class FakeCentral:
             )
         self._on_state_change("synced")
         return self.session
+
+    def logout(self):
+        # Боевой сервис: забыть сессию + (по настройке) стереть локальный кэш.
+        from mys_centralized.account import (
+            clear_session, load_wipe_on_logout, wipe_local_cache,
+        )
+        self.session = None
+        self.logged_out = True
+        clear_session(self.vault)
+        if load_wipe_on_logout(self.vault):
+            wipe_local_cache(self.vault)
 
     def send_message(self, conversation_id, body):
         lid = self.vault.messages.add(
@@ -220,4 +232,51 @@ def test_no_auto_resume_without_saved_session(qtbot, tmp_path, monkeypatch):
 
     assert c.central_session() is None
     assert "svc" not in holder  # сервис даже не создавался
+    c.lock()
+
+
+def test_settings_wipe_toggle_persists(qtbot, tmp_path):
+    c, _ = _ready(tmp_path)
+    w = MainWindow(c)
+    qtbot.addWidget(w)
+    d = SettingsDialog(c, w)
+    qtbot.addWidget(d)
+    assert d.wipe_on_logout.isChecked() is False  # по умолчанию история остаётся
+    d.wipe_on_logout.setChecked(True)
+    assert c.central_wipe_on_logout() is True
+    c.lock()
+
+
+def test_settings_logout_wipes_history_when_enabled(qtbot, tmp_path):
+    c, holder = _ready(tmp_path)
+    w = MainWindow(c)
+    qtbot.addWidget(w)
+    c.set_mode(CENTRALIZED)
+    w._perform_central_login("https://soufos.ru", "alice", "pw", False)
+    assert len(c.list_conversations()) == 1
+    c.set_central_wipe_on_logout(True)
+
+    d = SettingsDialog(c, w)
+    qtbot.addWidget(d)
+    assert d.btn_logout.isEnabled() is True
+    d._logout()
+
+    assert c.central_session() is None
+    assert c.list_conversations() == []  # история стёрта
+    c.lock()
+
+
+def test_settings_logout_keeps_history_by_default(qtbot, tmp_path):
+    c, holder = _ready(tmp_path)
+    w = MainWindow(c)
+    qtbot.addWidget(w)
+    c.set_mode(CENTRALIZED)
+    w._perform_central_login("https://soufos.ru", "alice", "pw", False)
+
+    d = SettingsDialog(c, w)
+    qtbot.addWidget(d)
+    d._logout()
+
+    assert c.central_session() is None
+    assert len(c.list_conversations()) == 1  # история осталась для офлайн-чтения
     c.lock()

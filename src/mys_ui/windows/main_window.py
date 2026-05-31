@@ -189,3 +189,10 @@ class MainWindow(QWidget):
 
     def _open_settings(self) -> None:
         SettingsDialog(self._c, self).exec()
+        # Логаут с очисткой кэша мог удалить беседы — пересобрать список и, если
+        # открытая беседа исчезла, очистить чат.
+        ids = {row["id"] for row in self._c.list_conversations()}
+        if self._current is not None and self._current not in ids:
+            self._current = None
+            self.chat.clear()
+        self.refresh_conversations()

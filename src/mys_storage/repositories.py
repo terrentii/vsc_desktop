@@ -27,6 +27,15 @@ class SettingsRepo(_Base):
         )
         self._c.commit()
 
+    def delete(self, key: str) -> None:
+        self._c.execute("DELETE FROM settings WHERE key=?", (key,))
+        self._c.commit()
+
+    def delete_prefix(self, prefix: str) -> None:
+        """Удалить все ключи с данным префиксом (напр. курсоры central.cursor.*)."""
+        self._c.execute("DELETE FROM settings WHERE key LIKE ?", (prefix + "%",))
+        self._c.commit()
+
 
 class IdentitiesRepo(_Base):
     def add(self, *, kind, public_key, private_key=None, label=None, context=None) -> int:
@@ -95,6 +104,11 @@ class ConversationsRepo(_Base):
         cur.row_factory = _row_factory
         return cur.fetchall()
 
+    def delete(self, conversation_id: int) -> None:
+        """Удалить беседу (сообщения чистить отдельно — FK без каскада)."""
+        self._c.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
+        self._c.commit()
+
 
 class MessagesRepo(_Base):
     def add(self, conversation_id, *, direction, body, status, wire_seq=None,
@@ -142,6 +156,12 @@ class MessagesRepo(_Base):
         self._c.execute(
             "UPDATE messages SET wire_seq=?, status=? WHERE id=?",
             (wire_seq, status, message_id),
+        )
+        self._c.commit()
+
+    def delete_for_conversation(self, conversation_id: int) -> None:
+        self._c.execute(
+            "DELETE FROM messages WHERE conversation_id=?", (conversation_id,)
         )
         self._c.commit()
 

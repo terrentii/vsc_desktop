@@ -223,6 +223,7 @@ async def test_login_bad_credentials_raises(vault):
 
 async def test_logout_clears_session(vault):
     server = FakeServer()
+    server.add_history(1, "hist")
     s, ws_url = await _serve(server)
     svc = _make_service(vault, server, ws_url)
     svc.start()
@@ -232,6 +233,28 @@ async def test_logout_clears_session(vault):
         await asyncio.to_thread(svc.logout)
         assert account.load_session(vault) is None
         assert server.logged_out
+        # По умолчанию (флаг не выставлен) локальная история остаётся.
+        assert vault.conversations.list("centralized")
+    finally:
+        await asyncio.to_thread(svc.stop)
+        s.close()
+        await s.wait_closed()
+
+
+async def test_logout_wipes_cache_when_enabled(vault):
+    server = FakeServer()
+    server.add_history(1, "hist")
+    s, ws_url = await _serve(server)
+    svc = _make_service(vault, server, ws_url)
+    svc.start()
+    try:
+        await asyncio.to_thread(svc.login, "http://srv", "alice", "pw")
+        conv = vault.conversations.list("centralized")[0]["id"]
+        assert vault.messages.list(conv)
+        account.save_wipe_on_logout(vault, True)
+        await asyncio.to_thread(svc.logout)
+        assert account.load_session(vault) is None
+        assert vault.conversations.list("centralized") == []  # кэш стёрт
     finally:
         await asyncio.to_thread(svc.stop)
         s.close()

@@ -174,3 +174,16 @@ class AppController:
     def central_logout(self) -> None:
         if self._central is not None:
             self._central.logout()
+
+    def central_wipe_on_logout(self) -> bool:
+        """Настройка: стирать локальную историю «Центра» при выходе."""
+        if self.vault is None:
+            return False
+        from mys_centralized.account import load_wipe_on_logout
+        return load_wipe_on_logout(self.vault)
+
+    def set_central_wipe_on_logout(self, value: bool) -> None:
+        if self.vault is None:
+            return
+        from mys_centralized.account import save_wipe_on_logout
+        save_wipe_on_logout(self.vault, value)
