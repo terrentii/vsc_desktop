@@ -150,6 +150,28 @@
 отложенный объём, упаковка, аудит безопасности) — в
 `docs/superpowers/specs/2026-05-31-roadmap-continuation.md`.
 
+7. **Стабилизация и сквозная интеграция (e2e).** ✅ Доказано, что МЫС работает
+   целиком против **реального** сервера. Серверные контракты реализованы в `vsc_web`
+   (отдельный репозиторий, свои коммиты): таблица `auth_tokens` + `Bearer`, REST
+   `/api/auth/*` `/api/rooms` `/api/rooms/<id>/messages` (курсор) `POST /api/messages`
+   (идемпотентность по `client_msg_id`), сырой `/ws` (flask-sock) с фан-аутом из
+   обоих путей записи, и rendezvous+relay `/p2p`. Гейтящий риск снят (Phase 0):
+   сырой `flask-sock` работает под eventlet-воркером в одном процессе с Flask-SocketIO
+   (деплой: `gunicorn -k eventlet -w 1`, один воркер — реестры in-memory per-process).
+   E2e со стороны десктопа: `tests/test_e2e_p2p.py` (P2P через встроенный
+   `rendezvous_server`: диалог, реконнект, порядок первого сообщения) и
+   `tests/test_e2e_centralized.py` (маркер `e2e_server`; против реального `vsc_web` в
+   subprocess: синк/отправка/идемпотентность + real-time между двумя аккаунтами через
+   живой `/ws`). Воспроизводимый прогон — `scripts/smoke.py` (+ `scripts/README.md`).
+   Спека/план: `docs/superpowers/specs/2026-05-31-roadmap-continuation.md` (§7),
+   `docs/superpowers/plans/2026-05-31-e2e-integration.md`.
+   **Оставшиеся follow-up:** (1) вступление в комнату «Центра» по коду/инвайту из
+   десктопа (в v1 нет — членство второго аккаунта в e2e инъектируется прямой записью
+   `RoomMember`); (2) `flask-sock`-деплой при >1 воркера (in-memory реестры
+   per-process → нужен общий брокер/sticky-routing); (3) опц. Task 3.2b — прогон
+   P2P-клиента против серверного `/p2p` из `vsc_web` (не только встроенного
+   `rendezvous_server`); (4) боевая проверка `/ws`/`/p2p` за nginx — вне CI.
+
 ## Разработка
 
 - Виртуальное окружение: `.venv/` (Python 3.13).
