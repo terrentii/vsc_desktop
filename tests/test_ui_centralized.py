@@ -26,6 +26,7 @@ class FakeCentral:
         self.session: Session | None = None
         self.started = False
         self.logged_out = False
+        self._next_room = 2  # login занимает room_id=b"1"
 
     def start(self):
         self.started = True
@@ -76,6 +77,14 @@ class FakeCentral:
         clear_session(self.vault)
         if load_wipe_on_logout(self.vault):
             wipe_local_cache(self.vault)
+
+    def create_room(self, name):
+        # Боевой сервис: серверная комната → локальная беседа с маппингом room_id.
+        rid = str(self._next_room).encode("utf-8")
+        self._next_room += 1
+        return self.vault.conversations.add(
+            mode="centralized", room_id=rid, title=name
+        )
 
     def send_message(self, conversation_id, body):
         lid = self.vault.messages.add(
@@ -232,6 +241,28 @@ def test_no_auto_resume_without_saved_session(qtbot, tmp_path, monkeypatch):
 
     assert c.central_session() is None
     assert "svc" not in holder  # сервис даже не создавался
+    c.lock()
+
+
+def test_central_new_conversation_creates_server_room(qtbot, tmp_path):
+    c, holder = _ready(tmp_path)
+    w = MainWindow(c)
+    qtbot.addWidget(w)
+    c.set_mode(CENTRALIZED)
+    w._perform_central_login("https://soufos.ru", "alice", "pw", False)
+    before = w.conversations.list.count()
+
+    w.add_conversation("проект")  # маршрутизируется в central.create_room
+
+    assert w.conversations.list.count() == before + 1
+    titles = [
+        w.conversations.list.item(i).text()
+        for i in range(w.conversations.list.count())
+    ]
+    assert "проект" in titles
+    # созданная беседа реально замаплена на серверный room_id (не пустая заглушка)
+    created = [conv for conv in c.list_conversations() if conv["title"] == "проект"][0]
+    assert created["room_id"] is not None
     c.lock()
 
 

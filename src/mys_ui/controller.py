@@ -76,6 +76,14 @@ class AppController:
         # Иначе (нет сети/фразы) — локальная заглушка.
         if self.mode == DECENTRALIZED and room_phrase and self._service is not None:
             return self._service.start_session(room_phrase)
+        # Централизованный режим с активной сессией — реальная серверная комната
+        # (создаётся на сервере, синкается в локальную беседу). Иначе — заглушка.
+        if (
+            self.mode == CENTRALIZED
+            and self._central is not None
+            and self._central.session is not None
+        ):
+            return self._central.create_room(title)
         return self.vault.conversations.add(mode=self.mode, title=title)
 
     def list_messages(self, conversation_id: int) -> list[dict]:

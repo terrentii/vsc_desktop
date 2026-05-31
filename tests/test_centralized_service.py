@@ -55,6 +55,14 @@ class FakeServer:
             return httpx.Response(401, json={"error": "unauthorized"})
         if path == "/api/rooms" and method == "GET":
             return httpx.Response(200, json={"rooms": self.rooms})
+        if path == "/api/rooms" and method == "POST":
+            body = json.loads(request.content)
+            new_id = max((r["id"] for r in self.rooms), default=0) + 1
+            room = {"id": new_id, "name": (body.get("name") or None),
+                    "is_direct": False, "updated_at": "t"}
+            self.rooms.append(room)
+            self.history.setdefault(new_id, [])
+            return httpx.Response(201, json=room)
         if path.startswith("/api/rooms/") and path.endswith("/messages") and method == "GET":
             room_id = int(path.split("/")[3])
             after = request.url.params.get("after")
@@ -255,6 +263,30 @@ async def test_logout_wipes_cache_when_enabled(vault):
         await asyncio.to_thread(svc.logout)
         assert account.load_session(vault) is None
         assert vault.conversations.list("centralized") == []  # кэш стёрт
+    finally:
+        await asyncio.to_thread(svc.stop)
+        s.close()
+        await s.wait_closed()
+
+
+async def test_create_room_then_send(vault):
+    server = FakeServer()
+    s, ws_url = await _serve(server)
+    svc = _make_service(vault, server, ws_url)
+    svc.start()
+    try:
+        await asyncio.to_thread(svc.login, "http://srv", "alice", "pw")
+        conv = await asyncio.to_thread(svc.create_room, "проект")
+        row = vault.conversations.get(conv)
+        assert row["mode"] == "centralized" and row["title"] == "проект"
+        # беседа замаплена на новый серверный room_id
+        new_room_id = server.rooms[-1]["id"]
+        mapped = vault.conversations.get_by_room_id(
+            str(new_room_id).encode(), mode="centralized")
+        assert mapped["id"] == conv
+        # в созданную комнату можно отправить — сообщение долетает до сервера
+        await asyncio.to_thread(svc.send_message, conv, "первое")
+        assert any(m["body"] == "первое" for m in server.history[new_room_id])
     finally:
         await asyncio.to_thread(svc.stop)
         s.close()

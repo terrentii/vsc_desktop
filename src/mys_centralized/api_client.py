@@ -123,6 +123,19 @@ class RestClient:
         except (KeyError, TypeError, ValueError) as exc:
             raise ProtocolError("malformed rooms response") from exc
 
+    async def create_room(self, name: str) -> Room:
+        resp = await self._request("POST", "/api/rooms", json={"name": name})
+        data = self._json(resp)
+        try:
+            return Room(
+                id=int(data["id"]),
+                name=data.get("name"),
+                is_direct=bool(data.get("is_direct", False)),
+                updated_at=data.get("updated_at"),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ProtocolError("malformed room response") from exc
+
     async def get_messages(
         self, room_id: int, *, after: int | None = None, limit: int | None = None
     ) -> tuple[list[RemoteMessage], int | None]:

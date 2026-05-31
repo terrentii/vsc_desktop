@@ -168,6 +168,10 @@ class CentralizedService:
         как ``AuthError`` (через колбэк или из синка)."""
         return self._submit(self._resume(), timeout=timeout)
 
+    def create_room(self, name: str, *, timeout: float = 15.0) -> int:
+        """Создать комнату на сервере → локальная беседа. Возвращает conv_id."""
+        return self._submit(self._create_room(name), timeout=timeout)
+
     def send_message(self, conversation_id: int, body: str, *, timeout: float = 15.0) -> int:
         """Отправить сообщение (REST, идемпотентно). Возвращает локальный id."""
         return self._submit(self._send(conversation_id, body), timeout=timeout)
@@ -244,6 +248,11 @@ class CentralizedService:
         except Exception as exc:  # сетевой/протокольный сбой live-канала
             self._on_state_change("disconnected")
             self._on_error(exc)
+
+    async def _create_room(self, name) -> int:
+        if self._sync is None:
+            raise RuntimeError("нет активной сессии")
+        return await self._sync.create_room(name)
 
     async def _send(self, conversation_id, body) -> int:
         if self._sync is None:

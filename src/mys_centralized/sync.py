@@ -56,6 +56,11 @@ class SyncEngine:
         rooms = await self._rest.list_rooms()
         return {r.id: self._conv_for_room(r.id, name=r.name) for r in rooms}
 
+    async def create_room(self, name: str) -> int:
+        """Создать комнату на сервере и завести/найти локальную беседу. → conv_id."""
+        room = await self._rest.create_room(name)
+        return self._conv_for_room(room.id, name=room.name)
+
     async def sync_history(self, server_room_id: int):
         """Дозагрузить историю комнаты от текущего курсора страницами."""
         conv_id = self._conv_for_room(server_room_id)

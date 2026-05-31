@@ -191,6 +191,18 @@ def require_bearer(fn):
 - `id` = `Room.id` (целое); `is_direct` = `room.personal_login is not None`;
   `updated_at` = ISO макс. `Message.timestamp` или `room.created_at`.
 
+`POST /api/rooms` — Bearer. Тело `{"name": "..."}` (имя опц., ≤64). Создаёт комнату
+по семантике веб-`rooms.create_room`: 10-значный `room_id`, `is_open=True`, caller —
+участник с ролью `godfather`. Ответ `201` — одна комната в форме `_room_dict`:
+
+```json
+{"id": 13, "name": "проект", "is_direct": false, "updated_at": "2026-05-31T09:00:00"}
+```
+
+- Это **другой метод** на `/api/rooms`, коллизии с `GET` (в `api_bp`) нет —
+  держим в `central_bp`. Управление комнатой (участники/выход/удаление) из
+  десктопа в v1 не предусмотрено.
+
 ### 6.3 История
 
 `GET /api/rooms/<int:room_id>/messages?after=<id>&limit=<n>` — Bearer.
