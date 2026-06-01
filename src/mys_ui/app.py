@@ -5,6 +5,7 @@ import sys
 from PySide6.QtWidgets import QApplication, QStackedWidget
 
 from mys_centralized import CentralizedService
+from mys_decentralized import P2PService
 
 from .controller import AppController
 from .theme import apply_dark_theme
@@ -16,6 +17,17 @@ def _central_factory(vault, *, on_message, on_state_change, on_error):
     """Боевая фабрика: ws_url выводится из server_url входа (см. service)."""
     return CentralizedService(
         vault,
+        on_message=on_message,
+        on_state_change=on_state_change,
+        on_error=on_error,
+    )
+
+
+def _p2p_factory(vault, rendezvous_url, *, on_message, on_state_change, on_error):
+    """Боевая фабрика P2P: rendezvous-URL приходит из диалога фразы."""
+    return P2PService(
+        vault,
+        rendezvous_url,
         on_message=on_message,
         on_state_change=on_state_change,
         on_error=on_error,
@@ -55,7 +67,9 @@ class AppShell(QStackedWidget):
 def main() -> None:
     app = QApplication(sys.argv)
     apply_dark_theme(app)
-    shell = AppShell(AppController(central_factory=_central_factory))
+    shell = AppShell(
+        AppController(central_factory=_central_factory, p2p_factory=_p2p_factory)
+    )
     shell.resize(900, 600)
     shell.show()
     sys.exit(app.exec())
