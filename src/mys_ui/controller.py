@@ -23,14 +23,18 @@ class AppController:
         *,
         kdf_params: dict | None = None,
         central_factory=None,
+        p2p_factory=None,
     ):
         self._path = vault_path or paths.default_vault_path()
         self._kdf = kdf_params
         self.vault: Vault | None = None
         self.mode: str = DECENTRALIZED
-        # P2P-сервис (mys_decentralized.P2PService) подключается извне; без него
-        # децентрализованный режим работает как локальная заглушка (нет сети).
+        # P2P-сервис создаётся лениво фабрикой при первом вызове ensure_p2p_service;
+        # attach_service позволяет подключить готовый сервис напрямую (без фабрики).
         self._service = None
+        self._p2p_factory = p2p_factory
+        self._p2p_rendezvous_url: str | None = None
+        self._p2p_observers: list[dict] = []
         # Централизованный сервис создаётся лениво при первом входе фабрикой
         # central_factory(vault, *, on_message, on_state_change, on_error).
         self._central_factory = central_factory
@@ -38,8 +42,60 @@ class AppController:
         self._central_observers: list[dict] = []
 
     def attach_service(self, service) -> None:
-        """Подключить P2P-сервис для децентрализованного режима."""
+        """Подключить готовый P2P-сервис (тесты/ручное подключение без фабрики)."""
         self._service = service
+
+    def p2p_available(self) -> bool:
+        """Сконфигурирован ли P2P (есть фабрика)."""
+        return self._p2p_factory is not None
+
+    def add_p2p_observer(
+        self, *, on_message=None, on_state_change=None, on_error=None
+    ) -> None:
+        """Подписаться на события P2P-сервиса (UI маршалит их в Qt-сигналы)."""
+        self._p2p_observers.append(
+            {"message": on_message, "state": on_state_change, "error": on_error}
+        )
+
+    def _notify_p2p(self, key: str, *args) -> None:
+        for obs in self._p2p_observers:
+            cb = obs.get(key)
+            if cb is not None:
+                cb(*args)
+
+    def _p2p_on_message(self, conversation_id: int, body: bytes) -> None:
+        self._notify_p2p("message", conversation_id, body)
+
+    def _p2p_on_state(self, conversation_id: int, state: str) -> None:
+        self._notify_p2p("state", conversation_id, state)
+
+    def _p2p_on_error(self, conversation_id: int | None, exc: Exception) -> None:
+        self._notify_p2p("error", conversation_id, exc)
+
+    def ensure_p2p_service(self, rendezvous_url: str):
+        """Поднять (или переключить) единственный P2P-сервис на данный rendezvous.
+
+        Тот же URL → переиспользуем; другой URL → останавливаем старый и строим
+        новый фабрикой. Колбэки сервиса уходят в p2p-наблюдателей."""
+        if self._p2p_factory is None:
+            raise RuntimeError("P2P-сервис не сконфигурирован")
+        if self._service is not None and self._p2p_rendezvous_url == rendezvous_url:
+            return self._service
+        if self._service is not None:
+            self._service.stop()
+            self._service = None
+            self._p2p_rendezvous_url = None
+        svc = self._p2p_factory(
+            self.vault,
+            rendezvous_url,
+            on_message=self._p2p_on_message,
+            on_state_change=self._p2p_on_state,
+            on_error=self._p2p_on_error,
+        )
+        svc.start()
+        self._service = svc
+        self._p2p_rendezvous_url = rendezvous_url
+        return svc
 
     # --- vault ----------------------------------------------------------------
 
@@ -55,6 +111,10 @@ class AppController:
         self.vault = open_vault(self._path, password)
 
     def lock(self) -> None:
+        if self._service is not None:
+            self._service.stop()  # остановить P2P-поток/сокет до закрытия vault
+            self._service = None
+            self._p2p_rendezvous_url = None
         if self._central is not None:
             self._central.stop()  # остановить фоновый loop до закрытия vault
             self._central = None
@@ -70,12 +130,22 @@ class AppController:
     def list_conversations(self) -> list[dict]:
         return self.vault.conversations.list(self.mode)
 
-    def create_conversation(self, title: str, *, room_phrase: str | None = None) -> int:
-        # В децентрализованном режиме с фразой и подключённым сервисом — реальная
-        # P2P-сессия (фраза → PAKE → канал); беседа создаётся/находится по room_id.
+    def create_conversation(
+        self,
+        title: str,
+        *,
+        room_phrase: str | None = None,
+        rendezvous_url: str | None = None,
+    ) -> int:
+        # Децентрализованный режим с фразой: фабрика → поднять/переключить сервис на
+        # указанный rendezvous → start_session (фраза → PAKE → канал). Если сервис
+        # подключён напрямую (attach_service, без фабрики) — используем его.
         # Иначе (нет сети/фразы) — локальная заглушка.
-        if self.mode == DECENTRALIZED and room_phrase and self._service is not None:
-            return self._service.start_session(room_phrase)
+        if self.mode == DECENTRALIZED and room_phrase:
+            if self._p2p_factory is not None and rendezvous_url:
+                self.ensure_p2p_service(rendezvous_url)
+            if self._service is not None:
+                return self._service.start_session(room_phrase)
         # Централизованный режим с активной сессией — реальная серверная комната
         # (создаётся на сервере, синкается в локальную беседу). Иначе — заглушка.
         if (
