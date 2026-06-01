@@ -111,6 +111,12 @@ def test_p2p_connect_worker_reports_failure(qtbot, tmp_path, monkeypatch):
     w = MainWindow(c)
     qtbot.addWidget(w)
 
+    warnings: list[tuple] = []
+    monkeypatch.setattr(
+        "mys_ui.windows.main_window.QMessageBox.warning",
+        lambda *a, **k: warnings.append(a),
+    )
+
     def boom(*a, **k):
         raise RuntimeError("нет связи")
 
@@ -119,6 +125,7 @@ def test_p2p_connect_worker_reports_failure(qtbot, tmp_path, monkeypatch):
         w._p2p_connect_worker("ф", "ws://a:1/p2p")
     assert blocker.args[0] is False
     assert "нет связи" in blocker.args[1]
+    assert warnings and "нет связи" in warnings[0][-1]
     c.lock()
 
 

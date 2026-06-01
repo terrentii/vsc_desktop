@@ -237,6 +237,9 @@ class MainWindow(QWidget):
             self.refresh_conversations()
         else:
             self._p2p_error = message or "Ошибка"
+            QMessageBox.warning(
+                self, "P2P: соединение не установлено", self._p2p_error
+            )
 
     def _on_p2p_message(self, conversation_id: int) -> None:
         self.refresh_conversations()
