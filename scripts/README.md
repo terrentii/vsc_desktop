@@ -61,3 +61,18 @@ cd vsc_desktop && python scripts/smoke.py
 in-memory per-process) — вне CI; см. решение Phase 0 в
 `docs/superpowers/plans/2026-05-31-e2e-integration.md` и серверные спеки
 `docs/superpowers/specs/2026-05-30-server-*.md`.
+
+## LAN-проверка P2P (run_rendezvous.py)
+
+Для ручной проверки децентрализованного режима между двумя машинами в локалке:
+
+1. На одной из машин (или любой в той же подсети) запустить rendezvous:
+   `LD_LIBRARY_PATH=<libsodium_dir> .venv/bin/python scripts/run_rendezvous.py --port 8765`
+   Скрипт напечатает `ws://<lan-ip>:8765/p2p`.
+2. На обеих машинах открыть приложение, режим P2P → «+ Новый диалог»,
+   ввести одинаковую секретную фразу и в поле «Rendezvous:» — напечатанный URL.
+3. После хендшейка беседа появится у обоих; обмен сообщениями идёт через relay
+   rendezvous-сервера.
+
+Для проверки вне локалки в поле «Rendezvous:» вписывается `wss://soufos.ru/p2p`
+(боевой сервер), сам скрипт при этом не нужен.
