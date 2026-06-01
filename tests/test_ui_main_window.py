@@ -59,3 +59,83 @@ def test_lock_emits_signal(qtbot, tmp_path):
     with qtbot.waitSignal(w.locked, timeout=1000):
         w.top.btn_lock.click()
     c.lock()
+
+
+class _FakeP2PSvc:
+    def __init__(self, vault, rendezvous_url, *, on_message, on_state_change, on_error):
+        self._vault = vault
+        self.on_message = on_message
+        self.started = False
+        self.stopped = False
+        self.sessions: dict[int, str] = {}
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+
+    def start_session(self, phrase, *, timeout=None):
+        cid = self._vault.conversations.add(
+            mode=DECENTRALIZED, title=phrase
+        )
+        self.sessions[cid] = phrase
+        return cid
+
+    def has_session(self, cid):
+        return cid in self.sessions
+
+
+def _p2p_window(tmp_path):
+    c = AppController(
+        str(tmp_path / "v.db"), kdf_params=FAST, p2p_factory=_FakeP2PSvc
+    )
+    c.create_vault(b"pw")
+    c.set_mode(DECENTRALIZED)
+    return c
+
+
+def test_p2p_connect_worker_creates_conversation(qtbot, tmp_path):
+    c = _p2p_window(tmp_path)
+    w = MainWindow(c)
+    qtbot.addWidget(w)
+    with qtbot.waitSignal(w._p2p_bridge.started, timeout=2000) as blocker:
+        w._p2p_connect_worker("общая фраза", "ws://a:1/p2p")
+    assert blocker.args == [True, ""]
+    assert len(c.list_conversations()) == 1
+    c.lock()
+
+
+def test_p2p_connect_worker_reports_failure(qtbot, tmp_path, monkeypatch):
+    c = _p2p_window(tmp_path)
+    w = MainWindow(c)
+    qtbot.addWidget(w)
+
+    def boom(*a, **k):
+        raise RuntimeError("нет связи")
+
+    monkeypatch.setattr(c, "create_conversation", boom)
+    with qtbot.waitSignal(w._p2p_bridge.started, timeout=2000) as blocker:
+        w._p2p_connect_worker("ф", "ws://a:1/p2p")
+    assert blocker.args[0] is False
+    assert "нет связи" in blocker.args[1]
+    c.lock()
+
+
+def test_p2p_incoming_message_refreshes(qtbot, tmp_path):
+    c = _p2p_window(tmp_path)
+    w = MainWindow(c)
+    qtbot.addWidget(w)
+    # Поднять сервис и сессию, выбрать беседу.
+    cid = c.create_conversation(
+        "ф", room_phrase="общая фраза", rendezvous_url="ws://a:1/p2p"
+    )
+    # Положить входящее в vault, как сделал бы сервис, затем дёрнуть колбэк.
+    ping = "пинг".encode()
+    c.vault.messages.add(cid, direction="in", body=ping, status="received")
+    w._on_select(cid)
+    before = w.chat.count()
+    with qtbot.waitSignal(w._p2p_bridge.message, timeout=2000):
+        c._p2p_on_message(cid, ping)
+    assert w.chat.count() >= before
+    c.lock()
