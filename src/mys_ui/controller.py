@@ -66,11 +66,11 @@ class AppController:
     def _p2p_on_message(self, conversation_id: int, body: bytes) -> None:
         self._notify_p2p("message", conversation_id, body)
 
-    def _p2p_on_state(self, state) -> None:
-        self._notify_p2p("state", state)
+    def _p2p_on_state(self, conversation_id: int, state: str) -> None:
+        self._notify_p2p("state", conversation_id, state)
 
-    def _p2p_on_error(self, exc: Exception) -> None:
-        self._notify_p2p("error", exc)
+    def _p2p_on_error(self, conversation_id: int | None, exc: Exception) -> None:
+        self._notify_p2p("error", conversation_id, exc)
 
     def ensure_p2p_service(self, rendezvous_url: str):
         """Поднять (или переключить) единственный P2P-сервис на данный rendezvous.
