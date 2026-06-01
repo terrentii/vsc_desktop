@@ -146,3 +146,18 @@ def test_p2p_incoming_message_refreshes(qtbot, tmp_path):
         c._p2p_on_message(cid, ping)
     assert w.chat.count() >= before
     c.lock()
+
+
+def test_p2p_state_and_error_observers_arity(qtbot, tmp_path):
+    # Сервис зовёт on_state_change/on_error с (conv_id, value); лямбды-наблюдатели
+    # окна должны принимать оба аргумента, иначе TypeError в рантайме.
+    c = _p2p_window(tmp_path)
+    w = MainWindow(c)
+    qtbot.addWidget(w)
+    with qtbot.waitSignal(w._p2p_bridge.state, timeout=1000):
+        c._p2p_on_state(1, "connected")
+    with qtbot.waitSignal(w._p2p_bridge.error, timeout=1000):
+        c._p2p_on_error(1, RuntimeError("boom"))
+    assert w._p2p_state == "connected"
+    assert "boom" in w._p2p_error
+    c.lock()

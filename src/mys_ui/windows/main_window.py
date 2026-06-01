@@ -98,8 +98,8 @@ class MainWindow(QWidget):
         self._p2p_bridge.started.connect(self._on_p2p_started)
         self._c.add_p2p_observer(
             on_message=lambda cid, _body: self._p2p_bridge.message.emit(cid),
-            on_state_change=lambda st: self._p2p_bridge.state.emit(str(st)),
-            on_error=lambda exc: self._p2p_bridge.error.emit(str(exc)),
+            on_state_change=lambda _cid, st: self._p2p_bridge.state.emit(str(st)),
+            on_error=lambda _cid, exc: self._p2p_bridge.error.emit(str(exc)),
         )
         self._p2p_state: str | None = None
         self._p2p_error: str | None = None
