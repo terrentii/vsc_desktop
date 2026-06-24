@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QApplication, QStackedWidget
 from mys_centralized import CentralizedService
 
 from .controller import AppController
-from .theme import apply_dark_theme
+from .theme import apply_theme
 from .windows.main_window import MainWindow
 from .windows.unlock import UnlockWindow
 
@@ -54,8 +54,8 @@ class AppShell(QStackedWidget):
 
 def main() -> None:
     app = QApplication(sys.argv)
-    apply_dark_theme(app)
+    apply_theme(app, "dark")
     shell = AppShell(AppController(central_factory=_central_factory))
-    shell.resize(900, 600)
+    shell.resize(1180, 760)
     shell.show()
     sys.exit(app.exec())
