@@ -58,11 +58,76 @@ sudo ./packaging/uninstall.sh --system
 | Fedora | `sudo dnf install -y libsodium python3` |
 | openSUSE | `sudo zypper install -y libsodium23 python3` |
 
-## Дальше (другие ОС / форматы)
+---
 
-Текущий метод — нативная установка через venv + XDG-интеграцию, работает на всех
-основных дистрибутивах. Следующие шаги для распространения (по желанию):
+# Дистрибутивы под несколько ОС
 
-- **AppImage** — один скачиваемый файл «запустил и работает», без установки;
-- **Flatpak** — песочница + установка через магазины (GNOME Software и пр.);
-- **Windows/macOS** — сборка через PyInstaller (`.exe` / `.app`).
+Помимо установки из исходников (выше), проект собирает **готовые нативные
+артефакты** под три ОС. Сборка под Windows и macOS возможна только на самих
+Windows/macOS (PyInstaller не кросс-компилирует) — поэтому всё автоматизировано
+в CI: `.github/workflows/release.yml` собирает все три на «родных» раннерах.
+
+| ОС | Формат | Чем собирается |
+|---|---|---|
+| Linux | `*.AppImage` (один файл) | `packaging/appimage/build-appimage.sh` |
+| Windows | установщик `*-setup.exe` | PyInstaller + Inno Setup |
+| macOS | `*.dmg` (внутри `.app`) | PyInstaller |
+
+## Автоматическая сборка (рекомендуется)
+
+```bash
+# поставить тег версии — CI соберёт три артефакта и приложит к GitHub Release
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Либо вручную: вкладка **Actions → build-release → Run workflow** (артефакты
+появятся в результатах прогона).
+
+## Linux — AppImage (можно собрать локально)
+
+```bash
+./packaging/appimage/build-appimage.sh          # → dist/MYS_Desktop-x86_64.AppImage
+```
+
+Самодостаточный файл: внутри изолированный Python, все зависимости и **bundled
+libsodium**. Пользователю: `chmod +x MYS_Desktop-x86_64.AppImage && ./MYS_Desktop-x86_64.AppImage`.
+
+## Windows — установщик .exe
+
+Собирается на Windows (или в CI). Локально:
+
+```powershell
+pip install . pyinstaller
+# нужен libsodium.dll: задать путь к нему
+$env:MYS_LIBSODIUM = "C:\path\to\libsodium.dll"
+pyinstaller packaging\pyinstaller\mys-desktop.spec    # → dist\mys-desktop\
+iscc packaging\windows\installer.iss                  # → dist\mys-desktop-setup-0.1.0.exe
+```
+
+Установщик ставит приложение для пользователя (без админа), создаёт ярлыки в меню
+«Пуск» и на рабочем столе, регистрирует деинсталлятор.
+
+## macOS — .app / .dmg
+
+Собирается на macOS (или в CI). Локально:
+
+```bash
+brew install libsodium
+pip install . pyinstaller
+bash packaging/macos/make-icns.sh                      # иконка .icns
+export MYS_LIBSODIUM="$(brew --prefix libsodium)/lib/libsodium.dylib"
+pyinstaller packaging/pyinstaller/mys-desktop.spec     # → dist/МЫС Desktop.app
+```
+
+> Сборки не подписаны Apple-сертификатом, поэтому при первом запуске сработает
+> Gatekeeper: открыть через **ПКМ → Открыть** (или «Системные настройки →
+> Конфиденциальность» → «Всё равно открыть»). Полноценная подпись/нотаризация —
+> отдельный шаг, требует платного Apple Developer ID.
+
+## libsodium во всех сборках
+
+Крипто-ядро (CPace для P2P) грузит libsodium через `ctypes`. Загрузчик
+(`mys_crypto/_ristretto.py`) ищет библиотеку в порядке: переменная
+`MYS_LIBSODIUM` → рядом с приложением (bundled в AppImage/.exe/.app) →
+системная. Поэтому P2P-режим работает и в самодостаточных сборках.

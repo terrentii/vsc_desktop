@@ -1,0 +1,119 @@
+name: build-release
+
+# Собирает нативные артефакты под три ОС:
+#   • Linux   — AppImage (один файл «скачал и запустил»)
+#   • Windows — установщик .exe (Inno Setup, PyInstaller внутри)
+#   • macOS   — .app в .dmg (PyInstaller)
+#
+# Запуск: пуш тега вида v0.1.0 (тогда создаётся GitHub Release с артефактами),
+# либо вручную через «Run workflow» (артефакты доступны как build artifacts).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------- Linux
+  linux-appimage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Системные зависимости
+        run: sudo apt-get update && sudo apt-get install -y libsodium23
+      - name: Сборка AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"   # раннеры без FUSE
+        run: |
+          chmod +x packaging/appimage/build-appimage.sh
+          ./packaging/appimage/build-appimage.sh --python 3.13
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: dist/*.AppImage
+
+  # ---------------------------------------------------------------- Windows
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Зависимости Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install . pyinstaller
+      - name: libsodium.dll
+        shell: pwsh
+        run: |
+          $url = "https://download.libsodium.org/libsodium/releases/libsodium-1.0.20-stable-msvc.zip"
+          Invoke-WebRequest -Uri $url -OutFile libsodium.zip
+          Expand-Archive libsodium.zip -DestinationPath libsodium
+          $dll = Get-ChildItem -Recurse libsodium -Filter libsodium.dll |
+                 Where-Object { $_.FullName -match 'x64\\Release\\v143\\dynamic' } |
+                 Select-Object -First 1
+          "MYS_LIBSODIUM=$($dll.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: PyInstaller
+        run: pyinstaller packaging/pyinstaller/mys-desktop.spec
+      - name: Inno Setup
+        run: |
+          choco install innosetup --no-progress -y
+          iscc packaging\windows\installer.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/mys-desktop-setup-*.exe
+
+  # ---------------------------------------------------------------- macOS
+  macos-app:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: libsodium (brew)
+        run: brew install libsodium
+      - name: Зависимости Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install . pyinstaller
+      - name: Иконка .icns
+        run: bash packaging/macos/make-icns.sh
+      - name: PyInstaller (.app)
+        env:
+          MYS_LIBSODIUM_HINT: "1"
+        run: |
+          export MYS_LIBSODIUM="$(brew --prefix libsodium)/lib/libsodium.dylib"
+          pyinstaller packaging/pyinstaller/mys-desktop.spec
+      - name: Упаковка в .dmg
+        run: |
+          hdiutil create -volname "МЫС Desktop" \
+            -srcfolder "dist/МЫС Desktop.app" \
+            -ov -format UDZO "dist/mys-desktop-macos.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: dist/mys-desktop-macos.dmg
+
+  # ---------------------------------------------------------------- Release
+  release:
+    needs: [linux-appimage, windows-installer, macos-app]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
