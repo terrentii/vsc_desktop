@@ -3,51 +3,39 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
-    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPushButton,
-    QVBoxLayout,
 )
 
 from mys_storage import WrongPassword
 
 from mys_ui import theme
+from mys_ui.widgets.brutal import BrutalButton, BrutalCheckBox, BrutalLineEdit
+from mys_ui.windows.frameless import FramelessDialog
 
 
-class SettingsDialog(QDialog):
+class SettingsDialog(FramelessDialog):
     def __init__(self, controller, parent=None):
-        super().__init__(parent)
+        super().__init__("Настройки", parent)
         self._c = controller
-        self.setWindowTitle("Настройки")
         self.setMinimumWidth(440)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 24, 28, 24)
-        layout.setSpacing(8)
-
-        title = QLabel("НАСТРОЙКИ")
-        title.setObjectName("DialogTitle")
-        layout.addWidget(title)
-        layout.addSpacing(12)
+        layout = self.body_layout
 
         layout.addWidget(self._section("МАСТЕР-ПАРОЛЬ"))
-        self.old_pw = QLineEdit()
+        self.old_pw = BrutalLineEdit()
         self.old_pw.setEchoMode(QLineEdit.Password)
-        self.new_pw = QLineEdit()
+        self.new_pw = BrutalLineEdit()
         self.new_pw.setEchoMode(QLineEdit.Password)
         layout.addWidget(self._label("СТАРЫЙ ПАРОЛЬ"))
         layout.addWidget(self.old_pw)
         layout.addWidget(self._label("НОВЫЙ ПАРОЛЬ"))
         layout.addWidget(self.new_pw)
-        layout.addSpacing(6)
+        layout.addSpacing(8)
 
-        self.btn_change = QPushButton("СМЕНИТЬ ПАРОЛЬ")
-        self.btn_change.setObjectName("PrimaryBtn")
-        self.btn_change.setCursor(Qt.PointingHandCursor)
+        self.btn_change = BrutalButton("Сменить пароль", "default", small=True)
         self.btn_change.clicked.connect(self._change)
         layout.addWidget(self.btn_change, 0, Qt.AlignLeft)
 
@@ -60,11 +48,8 @@ class SettingsDialog(QDialog):
         layout.addWidget(self._sep())
         layout.addWidget(self._section("ТЕМА"))
         theme_row = QHBoxLayout()
-        self.btn_light = QPushButton("Светлая")
-        self.btn_dark = QPushButton("Тёмная")
-        for b in (self.btn_light, self.btn_dark):
-            b.setObjectName("BarBtn")
-            b.setCursor(Qt.PointingHandCursor)
+        self.btn_light = BrutalButton("Светлая", "minimal", small=True)
+        self.btn_dark = BrutalButton("Тёмная", "minimal", small=True)
         self.btn_light.clicked.connect(lambda: self._set_theme("light"))
         self.btn_dark.clicked.connect(lambda: self._set_theme("dark"))
         theme_row.addWidget(self.btn_light)
@@ -78,23 +63,21 @@ class SettingsDialog(QDialog):
             layout.addWidget(self._sep())
             layout.addWidget(self._section("АККАУНТ «ЦЕНТР»"))
 
-            self.wipe_on_logout = QCheckBox("Стирать историю «Центра» при выходе")
+            self.wipe_on_logout = BrutalCheckBox("Стирать историю «Центра» при выходе")
             self.wipe_on_logout.setChecked(self._c.central_wipe_on_logout())
             self.wipe_on_logout.toggled.connect(self._c.set_central_wipe_on_logout)
             layout.addWidget(self.wipe_on_logout)
 
-            self.btn_logout = QPushButton("ВЫЙТИ ИЗ АККАУНТА")
-            self.btn_logout.setObjectName("WarnBtn")
-            self.btn_logout.setCursor(Qt.PointingHandCursor)
+            self.btn_logout = BrutalButton(
+                "Выйти из аккаунта", "minimal", small=True, danger=True
+            )
             self.btn_logout.setEnabled(self._c.central_session() is not None)
             self.btn_logout.clicked.connect(self._logout)
             layout.addWidget(self.btn_logout, 0, Qt.AlignLeft)
 
         layout.addSpacing(12)
         layout.addWidget(self._sep())
-        done = QPushButton("ГОТОВО")
-        done.setObjectName("PrimaryBtn")
-        done.setCursor(Qt.PointingHandCursor)
+        done = BrutalButton("Готово", "primary", small=True)
         done.clicked.connect(self.accept)
         layout.addWidget(done, 0, Qt.AlignRight)
 

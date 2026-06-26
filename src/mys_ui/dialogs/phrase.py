@@ -1,38 +1,25 @@
 """Ввод общей секретной фразы для P2P (фраза → PAKE/CPace → канал)."""
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
-    QDialog,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QPushButton,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 from mys_ui import theme
+from mys_ui.widgets import icons
+from mys_ui.widgets.brutal import BrutalButton, BrutalLineEdit
+from mys_ui.windows.frameless import FramelessDialog
 
 
-class PhraseDialog(QDialog):
+class PhraseDialog(FramelessDialog):
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Новый P2P-канал")
+        super().__init__("Новый P2P-канал", parent)
         self.setMinimumWidth(470)
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(28, 24, 28, 24)
-        root.setSpacing(8)
-
-        title = QLabel("НОВЫЙ P2P-КАНАЛ")
-        title.setObjectName("DialogTitle")
-        root.addWidget(title)
-        root.addSpacing(12)
+        root = self.body_layout
 
         lbl = QLabel("ОБЩАЯ СЕКРЕТНАЯ ФРАЗА")
         lbl.setObjectName("FieldLabel")
         root.addWidget(lbl)
-        self.field = QLineEdit()
+        self.field = BrutalLineEdit()
         self.field.setPlaceholderText("например: северный ветер сорок один")
         root.addWidget(self.field)
 
@@ -46,16 +33,12 @@ class PhraseDialog(QDialog):
         root.addSpacing(8)
 
         root.addWidget(self._warn_box())
-        root.addSpacing(10)
+        root.addSpacing(12)
 
         buttons = QHBoxLayout()
         buttons.addStretch()
-        self.btn_cancel = QPushButton("ОТМЕНА")
-        self.btn_cancel.setObjectName("GhostBtn")
-        self.btn_ok = QPushButton("ОТКРЫТЬ КАНАЛ")
-        self.btn_ok.setObjectName("PrimaryBtn")
-        for b in (self.btn_cancel, self.btn_ok):
-            b.setCursor(Qt.PointingHandCursor)
+        self.btn_cancel = BrutalButton("Отмена", "minimal")
+        self.btn_ok = BrutalButton("Открыть канал", "primary")
         buttons.addWidget(self.btn_cancel)
         buttons.addWidget(self.btn_ok)
         root.addLayout(buttons)
@@ -68,9 +51,9 @@ class PhraseDialog(QDialog):
         box = QWidget()
         box.setObjectName("WarnBox")
         lay = QHBoxLayout(box)
-        lay.setContentsMargins(14, 12, 14, 12)
-        icon = QLabel("⚠")
-        icon.setStyleSheet(f"color: {theme.tokens()['warning']}; background: transparent;")
+        lay.setContentsMargins(16, 12, 16, 12)
+        icon = QLabel()
+        icon.setPixmap(icons.pixmap(icons.warning, 22, theme.tokens()["warning"]))
         icon.setAlignment(Qt.AlignTop)
         text = QLabel(
             "Передайте фразу собеседнику только по защищённому каналу. "

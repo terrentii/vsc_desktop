@@ -5,7 +5,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -13,6 +12,8 @@ from PySide6.QtWidgets import (
 from mys_storage import VaultLocked, WrongPassword
 
 from mys_ui import theme
+from mys_ui.widgets import icons
+from mys_ui.widgets.brutal import BrutalButton, BrutalLineEdit
 
 
 class UnlockWindow(QWidget):
@@ -29,49 +30,55 @@ class UnlockWindow(QWidget):
         card = QWidget()
         card.setObjectName("VaultCard")
         card.setFixedWidth(420)
+        theme.block_shadow(card, 8, 8, theme.tokens()["accent"])
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(32, 30, 32, 30)
+        layout.setContentsMargins(36, 32, 36, 32)
         layout.setSpacing(8)
 
+        logo = QLabel()
+        logo.setPixmap(theme.logo_pixmap(64))
+        logo.setAlignment(Qt.AlignCenter)
         brand = QLabel("МЫС")
         brand.setObjectName("BrandMark")
-        brand.setFont(theme.display_font(34))
+        brand.setFont(theme.display_font(40))
         brand.setAlignment(Qt.AlignCenter)
         self.title = QLabel(
             "СОЗДАНИЕ ХРАНИЛИЩА" if self._creating else "РАЗБЛОКИРОВКА VAULT"
         )
         self.title.setObjectName("VaultTitle")
         self.title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(logo)
+        layout.addSpacing(8)
         layout.addWidget(brand)
         layout.addWidget(self.title)
-        layout.addSpacing(14)
+        layout.addSpacing(16)
 
         layout.addWidget(self._label("МАСТЕР-ПАРОЛЬ"))
-        self.password = QLineEdit()
+        self.password = BrutalLineEdit()
         self.password.setEchoMode(QLineEdit.Password)
         self.password.setPlaceholderText("••••••••")
         layout.addWidget(self.password)
 
-        self.confirm = QLineEdit()
+        self.confirm = BrutalLineEdit()
         self.confirm.setEchoMode(QLineEdit.Password)
         self.confirm.setPlaceholderText("••••••••")
         if self._creating:
-            layout.addSpacing(6)
+            layout.addSpacing(8)
             layout.addWidget(self._label("ПОВТОРИТЕ ПАРОЛЬ"))
             layout.addWidget(self.confirm)
 
-        layout.addSpacing(14)
+        layout.addSpacing(16)
         layout.addWidget(self._warn_box())
-        layout.addSpacing(6)
+        layout.addSpacing(8)
 
         self.error = QLabel("")
         self.error.setObjectName("ErrorText")
         self.error.setWordWrap(True)
         layout.addWidget(self.error)
 
-        self.submit = QPushButton("СОЗДАТЬ" if self._creating else "РАЗБЛОКИРОВАТЬ")
-        self.submit.setObjectName("PrimaryBtn")
-        self.submit.setCursor(Qt.PointingHandCursor)
+        self.submit = BrutalButton(
+            "Создать" if self._creating else "Разблокировать", "primary"
+        )
         self.submit.clicked.connect(self._on_submit)
         self.password.returnPressed.connect(self._on_submit)
         self.confirm.returnPressed.connect(self._on_submit)
@@ -88,9 +95,9 @@ class UnlockWindow(QWidget):
         box = QWidget()
         box.setObjectName("WarnBox")
         lay = QHBoxLayout(box)
-        lay.setContentsMargins(14, 12, 14, 12)
-        icon = QLabel("⚠")
-        icon.setStyleSheet(f"color: {theme.tokens()['warning']}; background: transparent;")
+        lay.setContentsMargins(16, 12, 16, 12)
+        icon = QLabel()
+        icon.setPixmap(icons.pixmap(icons.warning, 22, theme.tokens()["warning"]))
         icon.setAlignment(Qt.AlignTop)
         text = QLabel(
             "Пароль невозможно восстановить. Хранилище зашифровано на устройстве — "

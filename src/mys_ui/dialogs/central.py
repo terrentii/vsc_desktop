@@ -1,38 +1,26 @@
 """Диалог входа в централизованный режим: сервер, логин, пароль, Вход/Регистрация."""
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
-    QDialog,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QPushButton,
-    QVBoxLayout,
-)
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit
+
+from mys_ui.widgets.brutal import BrutalButton, BrutalLineEdit
+from mys_ui.windows.frameless import FramelessDialog
 
 DEFAULT_SERVER = "https://soufos.ru"
 
 
-class CentralLoginDialog(QDialog):
+class CentralLoginDialog(FramelessDialog):
     def __init__(self, parent=None, *, default_url: str = DEFAULT_SERVER):
-        super().__init__(parent)
-        self.setWindowTitle("Вход — Центр")
+        super().__init__("Вход — Центр", parent)
         self.setMinimumWidth(430)
         self._register = False
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(28, 24, 28, 24)
-        root.setSpacing(6)
+        root = self.body_layout
+        root.setSpacing(8)
 
-        title = QLabel("ВХОД — ЦЕНТР")
-        title.setObjectName("DialogTitle")
-        root.addWidget(title)
-        root.addSpacing(12)
-
-        self.server = QLineEdit(default_url)
-        self.username = QLineEdit()
+        self.server = BrutalLineEdit(default_url)
+        self.username = BrutalLineEdit()
         self.username.setPlaceholderText("terrentii")
-        self.password = QLineEdit()
+        self.password = BrutalLineEdit()
         self.password.setEchoMode(QLineEdit.Password)
         self.password.setPlaceholderText("••••••••")
         for label, field in (
@@ -47,14 +35,9 @@ class CentralLoginDialog(QDialog):
             root.addSpacing(8)
 
         buttons = QHBoxLayout()
-        self.btn_login = QPushButton("ВОЙТИ")
-        self.btn_login.setObjectName("PrimaryBtn")
-        self.btn_register = QPushButton("РЕГИСТРАЦИЯ")
-        self.btn_register.setObjectName("PrimaryBtn")
-        self.btn_cancel = QPushButton("ОТМЕНА")
-        self.btn_cancel.setObjectName("GhostBtn")
-        for b in (self.btn_login, self.btn_register, self.btn_cancel):
-            b.setCursor(Qt.PointingHandCursor)
+        self.btn_login = BrutalButton("Войти", "primary")
+        self.btn_register = BrutalButton("Регистрация", "default")
+        self.btn_cancel = BrutalButton("Отмена", "minimal")
         buttons.addWidget(self.btn_login, 1)
         buttons.addWidget(self.btn_register, 1)
         buttons.addWidget(self.btn_cancel)

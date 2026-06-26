@@ -21,6 +21,7 @@ class ConversationList(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("Sidebar")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self._mode = DECENTRALIZED
 
         layout = QVBoxLayout(self)
@@ -30,7 +31,7 @@ class ConversationList(QWidget):
         header = QWidget()
         header.setObjectName("SidebarHeader")
         h = QHBoxLayout(header)
-        h.setContentsMargins(16, 13, 16, 13)
+        h.setContentsMargins(16, 12, 16, 12)
         self.title = QLabel("ДИАЛОГИ")
         self.title.setObjectName("ListTitle")
         self.count = QLabel("0")
@@ -42,17 +43,16 @@ class ConversationList(QWidget):
 
         self.list = QListWidget()
         self.list.setObjectName("ConvList")
-        self.list.setFont(theme.mono_font(12))
+        self.list.setFont(theme.mono_font(16))
         layout.addWidget(self.list, 1)
 
-        from PySide6.QtWidgets import QPushButton
+        from mys_ui.widgets.brutal import BrutalButton
 
         wrap = QWidget()
         wl = QVBoxLayout(wrap)
         wl.setContentsMargins(12, 12, 12, 12)
-        self.btn_new = QPushButton("+ НОВЫЙ ДИАЛОГ")
-        self.btn_new.setObjectName("PrimaryBtn")
-        self.btn_new.setCursor(Qt.PointingHandCursor)
+        # DS create-btn: чернильное лицо + кобальтовая тень
+        self.btn_new = BrutalButton("+ Новый диалог", "ink", shadow="accent")
         wl.addWidget(self.btn_new)
         layout.addWidget(wrap)
 

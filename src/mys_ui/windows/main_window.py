@@ -1,16 +1,17 @@
-"""Главное окно: заголовок, панель инструментов, список/чат, статус-бар."""
+"""Главное окно: панель инструментов, список/чат, статус-бар.
+
+Строку заголовка с системными кнопками даёт безрамочный хром
+(``windows.frameless.FramelessWindow``) — здесь её нет."""
 
 import threading
 
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
-    QApplication,
     QDialog,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QMessageBox,
-    QPushButton,
     QSplitter,
     QStackedWidget,
     QVBoxLayout,
@@ -56,13 +57,12 @@ class MainWindow(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        root.addWidget(self._build_title_bar())
-
         self.top = TopBar()
         root.addWidget(self.top)
 
         split = QSplitter(Qt.Horizontal)
-        split.setHandleWidth(0)
+        split.setObjectName("MainSplit")
+        split.setHandleWidth(3)  # кобальтовая ручка = разделитель комнаты↔чат
         self.conversations = ConversationList()
         self.conversations.setMinimumWidth(240)
         split.addWidget(self.conversations)
@@ -100,29 +100,6 @@ class MainWindow(QWidget):
 
     # --- сборка UI -------------------------------------------------------------
 
-    def _build_title_bar(self) -> QWidget:
-        bar = QWidget()
-        bar.setObjectName("TitleBar")
-        bar.setFixedHeight(42)
-        lay = QHBoxLayout(bar)
-        lay.setContentsMargins(14, 0, 10, 0)
-        lay.setSpacing(12)
-        brand = QLabel("МЫС")
-        brand.setObjectName("BrandMark")
-        sub = QLabel("DESKTOP")
-        sub.setObjectName("BrandSub")
-        self._theme_btn = QPushButton(
-            "LIGHT" if theme.current_mode() == "dark" else "DARK"
-        )
-        self._theme_btn.setObjectName("ThemeToggle")
-        self._theme_btn.setCursor(Qt.PointingHandCursor)
-        self._theme_btn.clicked.connect(self._toggle_theme)
-        lay.addWidget(brand)
-        lay.addWidget(sub)
-        lay.addStretch()
-        lay.addWidget(self._theme_btn)
-        return bar
-
     def _build_chat_pane(self) -> QWidget:
         pane = QWidget()
         pane.setObjectName("ChatPane")
@@ -134,9 +111,9 @@ class MainWindow(QWidget):
         self._chat_header = QWidget()
         self._chat_header.setObjectName("ChatHeader")
         hh = QHBoxLayout(self._chat_header)
-        hh.setContentsMargins(18, 12, 18, 12)
+        hh.setContentsMargins(20, 14, 20, 14)
         col = QVBoxLayout()
-        col.setSpacing(3)
+        col.setSpacing(4)
         self._chat_name = QLabel("")
         self._chat_name.setObjectName("ChatName")
         self._chat_sub = QLabel("")
@@ -154,9 +131,14 @@ class MainWindow(QWidget):
         empty = QWidget()
         ev = QVBoxLayout(empty)
         ev.setAlignment(Qt.AlignCenter)
+        ev.setSpacing(20)
+        empty_logo = QLabel()
+        empty_logo.setPixmap(theme.logo_pixmap(48))
+        empty_logo.setAlignment(Qt.AlignCenter)
         self._empty_label = QLabel("ВЫБЕРИТЕ ДИАЛОГ\nИЛИ НАЧНИТЕ НОВЫЙ")
         self._empty_label.setObjectName("EmptyState")
         self._empty_label.setAlignment(Qt.AlignCenter)
+        ev.addWidget(empty_logo)
         ev.addWidget(self._empty_label)
         self._chat_stack.addWidget(empty)
 
@@ -177,12 +159,13 @@ class MainWindow(QWidget):
     def _build_status_bar(self) -> QWidget:
         bar = QWidget()
         bar.setObjectName("StatusBar")
-        bar.setFixedHeight(26)
+        bar.setFixedHeight(28)
         lay = QHBoxLayout(bar)
-        lay.setContentsMargins(14, 0, 14, 0)
+        lay.setContentsMargins(16, 0, 16, 0)
         dot = QLabel()
         dot.setObjectName("StatusDot")
         dot.setFixedSize(8, 8)
+        theme.block_shadow(dot, 2, 2, theme.tokens()["line"])
         self._status_text = QLabel("ГОТОВО")
         self._status_text.setObjectName("StatusText")
         self._status_mono = QLabel("")
@@ -196,14 +179,6 @@ class MainWindow(QWidget):
 
     def _set_status(self, text: str) -> None:
         self._status_text.setText(text.upper())
-
-    def _toggle_theme(self) -> None:
-        app = QApplication.instance()
-        if app is None:
-            return
-        new = theme.toggle_theme(app)
-        self._theme_btn.setText("LIGHT" if new == "dark" else "DARK")
-        self.chat.viewport().update()  # пузыри перерисовать в новых цветах
 
     # --- режимы ----------------------------------------------------------------
 
@@ -294,9 +269,22 @@ class MainWindow(QWidget):
         self._c.create_conversation(title, room_phrase=room_phrase)
         self.refresh_conversations()
 
+    def _peer_label(self, conversation_id: int) -> str:
+        """Имя собеседника/комнаты для подписи входящих строк журнала."""
+        for row in self._c.list_conversations():
+            if row["id"] == conversation_id:
+                return row.get("title") or f"Диалог {row['id']}"
+        return "Собеседник"
+
+    def _show_messages(self, conversation_id: int) -> None:
+        self.chat.show_messages(
+            self._c.list_messages(conversation_id),
+            peer_label=self._peer_label(conversation_id),
+        )
+
     def _on_select(self, conversation_id: int) -> None:
         self._current = conversation_id
-        self.chat.show_messages(self._c.list_messages(conversation_id))
+        self._show_messages(conversation_id)
         self._update_chat_header()
 
     def _on_new(self) -> None:
@@ -315,7 +303,7 @@ class MainWindow(QWidget):
         if self._current is None:
             return
         self._c.send_message(self._current, text)
-        self.chat.show_messages(self._c.list_messages(self._current))
+        self._show_messages(self._current)
         self._set_status("Сообщение отправлено")
 
     def _update_chat_header(self) -> None:
@@ -348,7 +336,7 @@ class MainWindow(QWidget):
     def _on_central_message(self, conversation_id: int, _local_id: int) -> None:
         self.refresh_conversations()  # могла появиться новая комната
         if conversation_id == self._current:
-            self.chat.show_messages(self._c.list_messages(conversation_id))
+            self._show_messages(conversation_id)
 
     def _on_central_state(self, state: str) -> None:
         self._central_state = state

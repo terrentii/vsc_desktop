@@ -1,10 +1,15 @@
-"""Лента сообщений диалога.
+"""Лента сообщений — «строки журнала» (новейший дизайн DS, не пузыри).
 
-Остаётся ``QListWidget`` (UI-тесты опираются на ``count()``/``item(i).text()``),
-но рисуется делегатом в стиле дизайна: «свои» — акцентный пузырь справа с блочной
-тенью, «входящие» — пузырь слева. Текст элемента = тело сообщения; направление
-хранится в ``Qt.UserRole``.
+Каждое сообщение: слева квадрат-аватар (mono-инициалы; своё — кобальтовое),
+сверху имя + mono-время, ниже чистый текст без коробки; строки разделяются
+hairline-линией. Остаётся ``QListWidget`` (UI-тесты опираются на ``count()`` и
+``item(i).text()``), но рисуется делегатом. Тело — ``DisplayRole``; направление,
+время, автор и инициалы — в доп. ролях.
+
+Spec: preview/components-message.html («убраны 2010-е скруглённые пузыри»).
 """
+
+import time
 
 from PySide6.QtCore import QRect, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QPen
@@ -13,72 +18,137 @@ from PySide6.QtWidgets import QListWidget, QListWidgetItem, QStyledItemDelegate
 from mys_ui import theme
 
 _DIRECTION_ROLE = Qt.UserRole + 1
+_TIME_ROLE = Qt.UserRole + 2
+_AUTHOR_ROLE = Qt.UserRole + 3
+_AVATAR_ROLE = Qt.UserRole + 4
 
-_PAD_X = 13
-_PAD_Y = 9
-_SHADOW = 3
-_MARGIN = 6
-_MAX_FRAC = 0.74
+_PAD_L = 20
+_PAD_R = 20
+_PAD_Y = 12
+_AVATAR = 32
+_GAP = 12
+_NAME_GAP = 4
 
 
-class _BubbleDelegate(QStyledItemDelegate):
-    def _layout(self, option, index):
-        """Геометрия пузыря: (own, text_rect, bubble_rect) в координатах элемента."""
-        own = index.data(_DIRECTION_ROLE) == "out"
-        text = index.data(Qt.DisplayRole) or ""
-        avail = option.rect.width() - 2 * _MARGIN - _SHADOW
-        max_w = max(120, int(avail * _MAX_FRAC))
-        fm = option.fontMetrics
+def _name_font() -> QFont:
+    f = QFont()
+    f.setFamilies(["GOST type B", "GOST 2.304 type A", "sans-serif"])
+    f.setPixelSize(16)
+    f.setWeight(QFont.DemiBold)
+    return f
+
+
+def _body_font() -> QFont:
+    f = QFont()
+    f.setFamilies(["GOST type B", "GOST 2.304 type A", "sans-serif"])
+    f.setPixelSize(16)
+    return f
+
+
+class _JournalDelegate(QStyledItemDelegate):
+    def _content_x(self) -> int:
+        return _PAD_L + _AVATAR + _GAP
+
+    def _body_geom(self, option, index):
+        body = index.data(Qt.DisplayRole) or ""
+        cx = self._content_x()
+        cw = max(60, option.rect.width() - cx - _PAD_R)
+        from PySide6.QtGui import QFontMetrics
+
+        name_h = QFontMetrics(_name_font()).height()
+        bf = QFontMetrics(_body_font())
         flags = int(Qt.TextWordWrap)
-        inner = max_w - 2 * _PAD_X
-        bound = fm.boundingRect(QRect(0, 0, inner, 10000), flags, text)
-        bw = min(max_w, bound.width() + 2 * _PAD_X)
-        bh = bound.height() + 2 * _PAD_Y
-        top = option.rect.top() + _MARGIN
-        if own:
-            left = option.rect.right() - _MARGIN - _SHADOW - bw
-        else:
-            left = option.rect.left() + _MARGIN
-        bubble = QRect(left, top, bw, bh)
-        text_rect = bubble.adjusted(_PAD_X, _PAD_Y, -_PAD_X, -_PAD_Y)
-        return own, text_rect, bubble, text, flags
+        bh = bf.boundingRect(QRect(0, 0, cw, 100000), flags, body).height()
+        return cx, cw, name_h, bh, body, flags
 
     def sizeHint(self, option, index):
-        self.initStyleOption(option, index)
-        _, _, bubble, _, _ = self._layout(option, index)
-        return QSize(option.rect.width(), bubble.height() + 2 * _MARGIN)
+        _, _, name_h, bh, _, _ = self._body_geom(option, index)
+        h = _PAD_Y + name_h + _NAME_GAP + bh + _PAD_Y
+        return QSize(option.rect.width(), max(h, _PAD_Y * 2 + _AVATAR))
 
     def paint(self, painter, option, index):
-        self.initStyleOption(option, index)
-        own, text_rect, bubble, text, flags = self._layout(option, index)
         t = theme.tokens()
-        line = QColor(t["line"])
+        own = index.data(_DIRECTION_ROLE) == "out"
+        author = index.data(_AUTHOR_ROLE) or ("я" if own else "Собеседник")
+        when = index.data(_TIME_ROLE) or ""
+        avatar = index.data(_AVATAR_ROLE) or author[:2]
+        cx, cw, name_h, bh, body, flags = self._body_geom(option, index)
+        r = option.rect
 
         painter.save()
         painter.setRenderHint(painter.RenderHint.Antialiasing, False)
 
-        # блочная тень (смещённый прямоугольник)
-        shadow = bubble.translated(-_SHADOW if own else _SHADOW, _SHADOW)
-        painter.fillRect(shadow, line)
+        # hairline-разделитель сверху (кроме первой строки)
+        if index.row() > 0:
+            painter.setPen(QPen(QColor(t["border2"]), 1))
+            painter.drawLine(r.left() + _PAD_L, r.top(), r.right() - _PAD_R, r.top())
 
-        if own:
-            fill, fg = QColor(t["accent"]), QColor("#ffffff")
-        else:
-            fill, fg = QColor(t["bubbleThem"]), QColor(t["bubbleThemText"])
-        painter.fillRect(bubble, fill)
-        painter.setPen(QPen(line, 1))
-        painter.drawRect(bubble.adjusted(0, 0, -1, -1))
+        top = r.top() + _PAD_Y
 
-        painter.setPen(fg)
-        painter.drawText(text_rect, flags, text)
+        # аватар-квадрат
+        av = QRect(r.left() + _PAD_L, top, _AVATAR, _AVATAR)
+        painter.fillRect(av, QColor(t["accent"] if own else t["line"]))
+        af = QFont()
+        af.setFamilies(["GOST type B", "GOST 2.304 type A", "monospace"])
+        af.setBold(True)
+        af.setPixelSize(13)
+        painter.setFont(af)
+        painter.setPen(QColor("#ffffff") if own else QColor(t["bg"]))
+        painter.drawText(av, Qt.AlignCenter, avatar)
+
+        # имя + время (baseline)
+        x = r.left() + cx
+        nf = _name_font()
+        painter.setFont(nf)
+        painter.setPen(QColor(t["text"]))
+        from PySide6.QtGui import QFontMetrics
+
+        nm = QFontMetrics(nf)
+        painter.drawText(QRect(x, top, cw, name_h), Qt.AlignVCenter | Qt.AlignLeft, author)
+        if when:
+            tf = QFont()
+            tf.setFamilies(["GOST type B", "GOST 2.304 type A", "monospace"])
+            tf.setPixelSize(11)
+            painter.setFont(tf)
+            painter.setPen(QColor(t["text3"]))
+            aw = nm.horizontalAdvance(author) + 10
+            painter.drawText(
+                QRect(x + aw, top, cw - aw, name_h), Qt.AlignVCenter | Qt.AlignLeft, when
+            )
+
+        # тело
+        painter.setFont(_body_font())
+        painter.setPen(QColor(t["text"]))
+        painter.drawText(QRect(x, top + name_h + _NAME_GAP, cw, bh), flags, body)
         painter.restore()
+
+
+def _fmt_time(epoch) -> str:
+    if not epoch:
+        return ""
+    try:
+        return time.strftime("%H:%M", time.localtime(float(epoch)))
+    except (TypeError, ValueError):
+        return ""
+
+
+def _avatar_for(author: str, own: bool) -> str:
+    if own:
+        return "я"
+    a = author.strip()
+    if not a:
+        return "?"
+    parts = a.split()
+    if len(parts) >= 2:
+        return (parts[0][:1] + parts[1][:1]).upper()
+    return a[:2].lower()
 
 
 class ChatView(QListWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("ChatView")
-        self.setItemDelegate(_BubbleDelegate(self))
+        self.setItemDelegate(_JournalDelegate(self))
         self.setSelectionMode(QListWidget.NoSelection)
         self.setFocusPolicy(Qt.NoFocus)
         self.setVerticalScrollMode(QListWidget.ScrollPerPixel)
@@ -86,12 +156,16 @@ class ChatView(QListWidget):
         self.setSpacing(0)
         self.setWordWrap(True)
 
-    def show_messages(self, messages: list[dict]) -> None:
+    def show_messages(self, messages: list[dict], *, peer_label: str = "Собеседник") -> None:
         self.clear()
         for m in messages:
             body = m["body"].decode("utf-8", "replace") if m["body"] is not None else ""
+            own = m["direction"] == "out"
+            author = "я" if own else peer_label
             item = QListWidgetItem(body)
             item.setData(_DIRECTION_ROLE, m["direction"])
-            item.setFont(QFont())
+            item.setData(_AUTHOR_ROLE, author)
+            item.setData(_TIME_ROLE, _fmt_time(m.get("sent_at") or m.get("received_at")))
+            item.setData(_AVATAR_ROLE, _avatar_for(author, own))
             self.addItem(item)
         self.scrollToBottom()

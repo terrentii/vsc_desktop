@@ -1,7 +1,9 @@
 """Строка ввода сообщения: вложение (декоративно) + поле + «Отправить»."""
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QPushButton, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QWidget
+
+from mys_ui.widgets.brutal import BrutalButton, BrutalLineEdit
 
 
 class MessageInput(QWidget):
@@ -10,23 +12,23 @@ class MessageInput(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("InputBar")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(12)
 
-        self.btn_attach = QPushButton("📎")
-        self.btn_attach.setObjectName("AttachBtn")
-        self.btn_attach.setFixedSize(40, 40)
-        self.btn_attach.setCursor(Qt.PointingHandCursor)
+        self.btn_attach = BrutalButton("Файл", "default")
+        f = self.btn_attach.font()
+        f.setPixelSize(20)
+        f.setBold(False)
+        self.btn_attach.setFont(f)
         self.btn_attach.setToolTip("Вложения недоступны в P2P v1")
 
-        self.field = QLineEdit()
+        self.field = BrutalLineEdit()
         self.field.setObjectName("MsgField")
         self.field.setPlaceholderText("Сообщение…")
 
-        self.btn_send = QPushButton("ОТПРАВИТЬ")
-        self.btn_send.setObjectName("PrimaryBtn")
-        self.btn_send.setCursor(Qt.PointingHandCursor)
+        self.btn_send = BrutalButton("Отправить", "primary")
 
         layout.addWidget(self.btn_attach)
         layout.addWidget(self.field, 1)
