@@ -341,6 +341,9 @@ class MainWindow(QWidget):
     def _on_central_state(self, state: str) -> None:
         self._central_state = state
         self._set_status(state)
+        # Периодический ресинк/реконнект мог подтянуть новые комнаты — обновим список.
+        if state in ("synced", "connected") and self._c.mode == CENTRALIZED:
+            self.refresh_conversations()
 
     def _on_central_error(self, message: str) -> None:
         self._central_error = message

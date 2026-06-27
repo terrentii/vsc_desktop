@@ -25,11 +25,13 @@ def _cursor_key(server_room_id: int) -> str:
 
 
 class SyncEngine:
-    def __init__(self, vault, rest, *, on_message=None, page_limit: int = 200):
+    def __init__(self, vault, rest, *, on_message=None, page_limit: int = 200,
+                 own_username: str | None = None):
         self._vault = vault
         self._rest = rest
         self._on_message = on_message  # callback(conv_id, local_id, RemoteMessage)
         self._page_limit = page_limit
+        self._own_username = own_username  # для дедупа собственного эха без client_msg_id
 
     # -- сопоставление комнат и бесед --------------------------------------
 
@@ -130,6 +132,15 @@ class SyncEngine:
                 # наше собственное эхо — связываем серверный id с исходящей записью
                 if pending["wire_seq"] is None:
                     self._vault.messages.mark_sent(pending["id"], wire_seq=msg.id)
+                return None
+        if self._own_username is not None and msg.sender == self._own_username:
+            # Эхо собственного сообщения, в котором сервер не вернул client_msg_id
+            # (WS-кадр): связываем по телу с неподтверждённым исходящим, иначе
+            # получили бы дубликат-«входящее» из-за гонки POST-ответа и WS-эха.
+            body = msg.body.encode("utf-8")
+            pending = self._vault.messages.find_unconfirmed_out_by_body(conv_id, body)
+            if pending is not None:
+                self._vault.messages.mark_sent(pending["id"], wire_seq=msg.id)
                 return None
         local_id = self._vault.messages.add(
             conv_id, direction="in", body=msg.body.encode("utf-8"),
