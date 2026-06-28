@@ -55,6 +55,12 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
         "ALTER TABLE messages ADD COLUMN client_msg_id TEXT",
         "CREATE INDEX idx_messages_conv_wire ON messages(conversation_id, wire_seq)",
     ]),
+    # v3 — отображение сообщений (под-проект A): автор, серверное время, медиа.
+    (3, [
+        "ALTER TABLE messages ADD COLUMN author TEXT",
+        "ALTER TABLE messages ADD COLUMN created_ts REAL",
+        "ALTER TABLE messages ADD COLUMN media TEXT",
+    ]),
 ]
 
 TARGET_VERSION = MIGRATIONS[-1][0]

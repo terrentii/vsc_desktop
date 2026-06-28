@@ -45,3 +45,21 @@ def test_contacts_and_conversations_and_messages(tmp_path):
     v.messages.set_status(m1, "delivered")
     assert v.messages.list(conv)[0]["status"] == "delivered"
     v.close()
+
+
+def test_messages_store_author_created_ts_media(tmp_path):
+    v = _vault(tmp_path)
+    conv = v.conversations.add(mode="centralized", room_id=b"1", title="g")
+    mid = v.messages.add(
+        conv, direction="in", body=b"yo", status="received",
+        author="alice", created_ts=1719500000.0, media="x.png",
+    )
+    row = [m for m in v.messages.list(conv) if m["id"] == mid][0]
+    assert row["author"] == "alice"
+    assert row["created_ts"] == 1719500000.0
+    assert row["media"] == "x.png"
+    # Старый вызов без новых параметров — значения NULL.
+    mid2 = v.messages.add(conv, direction="out", body=b"hi", status="sent")
+    row2 = [m for m in v.messages.list(conv) if m["id"] == mid2][0]
+    assert row2["author"] is None and row2["created_ts"] is None and row2["media"] is None
+    v.close()
