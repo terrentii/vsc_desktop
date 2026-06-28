@@ -140,6 +140,40 @@ async def test_ingest_links_pending_out_by_client_id(vault):
     assert msgs[0]["status"] == "sent"
 
 
+async def test_own_echo_without_client_id_deduped_by_body(vault):
+    # Сервер в WS-кадре не присылает client_msg_id, а эхо приходит ДО mark_sent
+    # (wire_seq ещё None) — дедуп должен сработать по телу+отправителю, без дубля.
+    rest = FakeRest()
+    rest.rooms = [Room(id=1, name="g")]
+    eng = SyncEngine(vault, rest, own_username="me")
+    conv = (await eng.sync_rooms())[1]
+    vault.messages.add(conv, direction="out", body=b"hi", status="pending",
+                       client_msg_id="cid-1")  # отправлено, ответ POST ещё не пришёл
+    echo = {"type": "message", "room_id": 1, "id": 77, "sender": "me",
+            "body": "hi", "created_at": "t"}  # client_msg_id отсутствует
+    await eng.ingest_ws(echo)
+    msgs = vault.messages.list(conv)
+    assert len(msgs) == 1
+    assert msgs[0]["wire_seq"] == 77 and msgs[0]["direction"] == "out"
+
+
+async def test_identical_own_messages_not_collapsed(vault):
+    # Два одинаковых исходящих не должны схлопнуться: каждое эхо линкуется со
+    # старейшим неподтверждённым, после чего у него проставлен wire_seq.
+    rest = FakeRest()
+    rest.rooms = [Room(id=1, name="g")]
+    eng = SyncEngine(vault, rest, own_username="me")
+    conv = (await eng.sync_rooms())[1]
+    vault.messages.add(conv, direction="out", body=b"x", status="pending", client_msg_id="a")
+    vault.messages.add(conv, direction="out", body=b"x", status="pending", client_msg_id="b")
+    await eng.ingest_ws({"type": "message", "room_id": 1, "id": 10, "sender": "me",
+                         "body": "x", "created_at": "t"})
+    await eng.ingest_ws({"type": "message", "room_id": 1, "id": 11, "sender": "me",
+                         "body": "x", "created_at": "t"})
+    wires = sorted(m["wire_seq"] for m in vault.messages.list(conv))
+    assert wires == [10, 11]
+
+
 async def test_send_failure_marks_failed(vault):
     rest = FakeRest()
     rest.rooms = [Room(id=1, name="g")]

@@ -152,6 +152,19 @@ class MessagesRepo(_Base):
         cur.row_factory = _row_factory
         return cur.fetchone()
 
+    def find_unconfirmed_out_by_body(self, conversation_id, body):
+        """Старейшее исходящее с таким телом, ещё не получившее серверный id.
+
+        Нужно для дедупа собственного эха, когда сервер в WS-кадре не присылает
+        ``client_msg_id``: связываем эхо с уже отправленным исходящим по телу."""
+        cur = self._c.execute(
+            "SELECT * FROM messages WHERE conversation_id=? AND direction='out'"
+            " AND wire_seq IS NULL AND body=? ORDER BY id LIMIT 1",
+            (conversation_id, body),
+        )
+        cur.row_factory = _row_factory
+        return cur.fetchone()
+
     def mark_sent(self, message_id: int, *, wire_seq, status: str = "sent") -> None:
         self._c.execute(
             "UPDATE messages SET wire_seq=?, status=? WHERE id=?",

@@ -2,13 +2,14 @@
 
 import sys
 
-from PySide6.QtWidgets import QApplication, QStackedWidget
+from PySide6.QtWidgets import QApplication
 
 from mys_centralized import CentralizedService
 from mys_decentralized import P2PService
 
 from .controller import AppController
-from .theme import apply_dark_theme
+from .theme import app_icon, apply_theme
+from .windows.frameless import FramelessWindow
 from .windows.main_window import MainWindow
 from .windows.unlock import UnlockWindow
 
@@ -34,7 +35,9 @@ def _p2p_factory(vault, rendezvous_url, *, on_message, on_state_change, on_error
     )
 
 
-class AppShell(QStackedWidget):
+class AppShell(FramelessWindow):
+    """Безрамочное окно приложения: общий хром + переключение вход ↔ главное."""
+
     def __init__(self, controller):
         super().__init__()
         self._c = controller
@@ -56,20 +59,21 @@ class AppShell(QStackedWidget):
         self._show_unlock()
 
     def _swap(self, widget) -> None:
-        while self.count():
-            old = self.widget(0)
-            self.removeWidget(old)
+        while self.content.count():
+            old = self.content.widget(0)
+            self.content.removeWidget(old)
             old.deleteLater()
-        self.addWidget(widget)
-        self.setCurrentWidget(widget)
+        self.content.addWidget(widget)
+        self.content.setCurrentWidget(widget)
 
 
 def main() -> None:
     app = QApplication(sys.argv)
-    apply_dark_theme(app)
+    apply_theme(app, "dark")
+    app.setWindowIcon(app_icon())
     shell = AppShell(
         AppController(central_factory=_central_factory, p2p_factory=_p2p_factory)
     )
-    shell.resize(900, 600)
+    shell.resize(1180, 760)
     shell.show()
     sys.exit(app.exec())

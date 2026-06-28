@@ -1,6 +1,7 @@
 """Жизненный цикл зашифрованного vault."""
 
 import base64
+import hmac
 import os
 import threading
 import time
@@ -142,7 +143,7 @@ class Vault:
     def change_password(self, old_password: bytes, new_password: bytes) -> None:
         salt = base64.b64decode(self._meta["kdf"]["salt"])
         check = kdf.derive_db_key(old_password, salt, **_kdf_kwargs(self._meta))
-        if check.hex() != self._key.hex():
+        if not hmac.compare_digest(bytes(check), bytes(self._key)):
             check.wipe()
             raise WrongPassword()
         check.wipe()

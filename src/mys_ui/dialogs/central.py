@@ -1,42 +1,47 @@
 """Диалог входа в централизованный режим: сервер, логин, пароль, Вход/Регистрация."""
 
-from PySide6.QtWidgets import (
-    QDialog,
-    QFormLayout,
-    QHBoxLayout,
-    QLineEdit,
-    QPushButton,
-    QVBoxLayout,
-)
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit
+
+from mys_ui.widgets.brutal import BrutalButton, BrutalLineEdit
+from mys_ui.windows.frameless import FramelessDialog
 
 DEFAULT_SERVER = "https://soufos.ru"
 
 
-class CentralLoginDialog(QDialog):
+class CentralLoginDialog(FramelessDialog):
     def __init__(self, parent=None, *, default_url: str = DEFAULT_SERVER):
-        super().__init__(parent)
-        self.setWindowTitle("Вход — Центр")
+        super().__init__("Вход — Центр", parent)
+        self.setMinimumWidth(430)
         self._register = False
 
-        root = QVBoxLayout(self)
-        form = QFormLayout()
-        self.server = QLineEdit(default_url)
-        self.username = QLineEdit()
-        self.password = QLineEdit()
+        root = self.body_layout
+        root.setSpacing(8)
+
+        self.server = BrutalLineEdit(default_url)
+        self.username = BrutalLineEdit()
+        self.username.setPlaceholderText("terrentii")
+        self.password = BrutalLineEdit()
         self.password.setEchoMode(QLineEdit.Password)
-        form.addRow("Сервер:", self.server)
-        form.addRow("Логин:", self.username)
-        form.addRow("Пароль:", self.password)
-        root.addLayout(form)
+        self.password.setPlaceholderText("••••••••")
+        for label, field in (
+            ("СЕРВЕР", self.server),
+            ("ЛОГИН", self.username),
+            ("ПАРОЛЬ", self.password),
+        ):
+            lbl = QLabel(label)
+            lbl.setObjectName("FieldLabel")
+            root.addWidget(lbl)
+            root.addWidget(field)
+            root.addSpacing(8)
 
         buttons = QHBoxLayout()
-        self.btn_login = QPushButton("Вход")
-        self.btn_register = QPushButton("Регистрация")
-        self.btn_cancel = QPushButton("Отмена")
-        buttons.addWidget(self.btn_login)
-        buttons.addWidget(self.btn_register)
-        buttons.addStretch()
+        self.btn_login = BrutalButton("Войти", "primary")
+        self.btn_register = BrutalButton("Регистрация", "default")
+        self.btn_cancel = BrutalButton("Отмена", "minimal")
+        buttons.addWidget(self.btn_login, 1)
+        buttons.addWidget(self.btn_register, 1)
         buttons.addWidget(self.btn_cancel)
+        root.addSpacing(8)
         root.addLayout(buttons)
 
         self.btn_login.clicked.connect(self._accept_login)
