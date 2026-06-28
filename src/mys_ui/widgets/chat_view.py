@@ -1,24 +1,26 @@
 """Лента сообщений — «журнал» (как в vsc_web, не пузыри).
 
-Остаётся ``QListWidget`` (UI-тесты опираются на ``count()`` и ``item(i).text()``):
-``item.text()`` хранит сырое тело, но каждая строка рисуется виджетом
-``MessageRow`` через ``setItemWidget`` — это нужно для интерактивных блоков кода
-(кнопка «Копировать») и медиа.
+Раскладка — ``QScrollArea`` с вертикальным стеком виджетов-строк ``MessageRow``.
+Так высота строки считается самой раскладкой по реальной ширине (перенос слов
+работает корректно), и нет двойного рендера, который был у ``QListWidget`` +
+``setItemWidget`` (делегат списка рисовал сырое тело под виджетом).
+
+Совместимость с тестами/потребителями: ``count()`` — число строк, ``item(i)``
+возвращает ``MessageRow`` (у него есть ``.text()`` с сырым телом), ``clear()``.
 
 Отправитель различается цветом имени: своё — акцент (кобальт), чужое — обычный
-текст, anon — приглушённый mono. Время берётся из серверного ``created_ts``,
-иначе из ``sent_at``/``received_at``.
+текст, anon — приглушённый. Время берётся из серверного ``created_ts``, иначе из
+``sent_at``/``received_at``.
 """
 
 import time
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -44,7 +46,12 @@ class MessageRow(QWidget):
         self.author = author
         self.author_color = author_color
         self.when = when
+        self.raw_body = body
+        self.setObjectName("MessageRow")
         t = theme.tokens()
+        self.setStyleSheet(
+            f"#MessageRow {{ border-bottom: 1px solid {t['border2']}; }}"
+        )
 
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 12, 20, 12)
@@ -53,7 +60,7 @@ class MessageRow(QWidget):
         header = QHBoxLayout()
         header.setSpacing(10)
         name = QLabel(author)
-        name.setTextFormat(Qt.PlainText)  # имя от удалённого собеседника — не рендерим как HTML
+        name.setTextFormat(Qt.PlainText)  # имя от собеседника — не рендерим как HTML
         nf = QFont()
         nf.setBold(True)
         nf.setPixelSize(13)
@@ -83,17 +90,43 @@ class MessageRow(QWidget):
         if media:
             root.addWidget(MediaView(media))
 
+    def text(self) -> str:
+        """Сырое тело сообщения (для совместимости с тестами на ленту)."""
+        return self.raw_body
 
-class ChatView(QListWidget):
+
+class ChatView(QScrollArea):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("ChatView")
-        self.setSelectionMode(QListWidget.NoSelection)
+        self.setWidgetResizable(True)
         self.setFocusPolicy(Qt.NoFocus)
-        self.setVerticalScrollMode(QListWidget.ScrollPerPixel)
-        self.setUniformItemSizes(False)
-        self.setSpacing(0)
-        self.setWordWrap(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        self._rows: list[MessageRow] = []
+        self._container = QWidget()
+        self._container.setObjectName("ChatContainer")
+        self._vbox = QVBoxLayout(self._container)
+        self._vbox.setContentsMargins(0, 0, 0, 0)
+        self._vbox.setSpacing(0)
+        self._vbox.addStretch(1)  # строки добавляются перед растяжкой → прижаты вверх
+        self.setWidget(self._container)
+
+    # -- совместимый API ----------------------------------------------------
+
+    def count(self) -> int:
+        return len(self._rows)
+
+    def item(self, i: int) -> MessageRow:
+        return self._rows[i]
+
+    def clear(self) -> None:
+        for row in self._rows:
+            self._vbox.removeWidget(row)
+            row.deleteLater()
+        self._rows = []
+
+    # -- наполнение ---------------------------------------------------------
 
     def show_messages(self, messages: list[dict], *, peer_label: str = "Собеседник") -> None:
         self.clear()
@@ -110,12 +143,15 @@ class ChatView(QListWidget):
             when = _fmt_time(
                 m.get("created_ts") or m.get("sent_at") or m.get("received_at")
             )
-            item = QListWidgetItem(body)
             row = MessageRow(
                 author=author, author_color=color, when=when,
                 body=body, media=m.get("media"),
             )
-            item.setSizeHint(row.sizeHint())
-            self.addItem(item)
-            self.setItemWidget(item, row)
-        self.scrollToBottom()
+            # вставляем перед финальной растяжкой
+            self._vbox.insertWidget(self._vbox.count() - 1, row)
+            self._rows.append(row)
+        QTimer.singleShot(0, self._scroll_to_bottom)
+
+    def _scroll_to_bottom(self) -> None:
+        bar = self.verticalScrollBar()
+        bar.setValue(bar.maximum())

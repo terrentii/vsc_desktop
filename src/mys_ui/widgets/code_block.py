@@ -3,6 +3,7 @@
 Структура повторяет .code-block из vsc_web (без подсветки синтаксиса).
 """
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
@@ -65,9 +66,17 @@ class CodeBlock(QWidget):
             f"QPlainTextEdit {{ background: {t['surface']}; color: {t['text']};"
             " padding: 8px 12px; }"
         )
-        # высота под контент (без внутреннего скролла на коротком коде)
+        # высота под контент (без внутреннего скролла на коротком коде):
+        # считаем по реальной межстрочной высоте моно-шрифта + вертикальный padding.
+        from PySide6.QtGui import QFontMetrics
+
+        line_h = QFontMetrics(mono).lineSpacing()
         lines = code.count("\n") + 1
-        self.pre.setFixedHeight(min(max(lines, 1), 20) * 18 + 18)
+        # запас: padding QSS (8+8) + document margin (2*4) + небольшой буфер
+        chrome = 16 + 2 * int(self.pre.document().documentMargin()) + 6
+        self.pre.setFixedHeight(min(max(lines, 1), 20) * line_h + chrome)
+        if lines <= 20:  # помещается целиком — без внутреннего скролла
+            self.pre.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         root.addWidget(self.pre)
 
     def _copy(self) -> None:
