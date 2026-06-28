@@ -10,10 +10,27 @@ live-кадры WS лишь персистятся и дедупятся по с
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from .models import RemoteMessage
 
 MODE = "centralized"
+
+
+def _parse_iso(value) -> float | None:
+    """ISO-таймстамп сервера → epoch (сек, UTC). Пустой/битый → None."""
+    if not value:
+        return None
+    try:
+        s = str(value)
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except (ValueError, TypeError):
+        return None
 
 
 def _room_key(server_room_id: int) -> bytes:
@@ -145,6 +162,7 @@ class SyncEngine:
         local_id = self._vault.messages.add(
             conv_id, direction="in", body=msg.body.encode("utf-8"),
             status="received", wire_seq=msg.id,
+            author=msg.sender, created_ts=_parse_iso(msg.created_at),
         )
         if self._on_message is not None:
             self._on_message(conv_id, local_id, msg)

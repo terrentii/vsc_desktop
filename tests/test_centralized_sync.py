@@ -202,3 +202,26 @@ def test_account_session_roundtrip(vault):
     assert account.load_session(vault) == s
     account.clear_session(vault)
     assert account.load_session(vault) is None
+
+
+def test_ingest_stores_author_and_created_ts(vault):
+    eng = SyncEngine(vault, rest=None)
+    conv = vault.conversations.add(mode="centralized", room_id=b"5", title="g")
+    eng._ingest(conv, RemoteMessage(
+        id=1, room_id=5, sender="alice", body="hi",
+        created_at="2024-06-27T12:00:00Z",
+    ))
+    row = vault.messages.list(conv)[0]
+    assert row["author"] == "alice"
+    assert row["created_ts"] == pytest.approx(1719489600.0)
+
+
+def test_ingest_bad_created_at_yields_none(vault):
+    eng = SyncEngine(vault, rest=None)
+    conv = vault.conversations.add(mode="centralized", room_id=b"6", title="g")
+    eng._ingest(conv, RemoteMessage(
+        id=2, room_id=6, sender="bob", body="yo", created_at="t",
+    ))
+    row = vault.messages.list(conv)[0]
+    assert row["author"] == "bob"
+    assert row["created_ts"] is None
