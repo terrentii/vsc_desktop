@@ -53,6 +53,7 @@ class MessageRow(QWidget):
         header = QHBoxLayout()
         header.setSpacing(10)
         name = QLabel(author)
+        name.setTextFormat(Qt.PlainText)  # имя от удалённого собеседника — не рендерим как HTML
         nf = QFont()
         nf.setBold(True)
         nf.setPixelSize(13)
@@ -73,6 +74,7 @@ class MessageRow(QWidget):
                 root.addWidget(CodeBlock(seg))
             else:
                 lbl = QLabel(seg)
+                lbl.setTextFormat(Qt.PlainText)  # тело от собеседника — не рендерим как HTML
                 lbl.setWordWrap(True)
                 lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
                 lbl.setStyleSheet(f"color: {t['text']}; font-size: 14px;")

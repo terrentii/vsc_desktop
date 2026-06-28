@@ -74,3 +74,21 @@ def test_item_text_holds_raw_body(qtbot):
     cv.show_messages([_msg("in", "привет", author="a")], peer_label="b")
     assert cv.count() == 1
     assert "привет" in cv.item(0).text()
+
+
+def test_body_and_author_not_rendered_as_html(qtbot):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QLabel
+
+    cv = ChatView()
+    qtbot.addWidget(cv)
+    cv.show_messages(
+        [_msg("in", "<b>злой</b>", author="<i>peer</i>")], peer_label="b"
+    )
+    row = cv.itemWidget(cv.item(0))
+    labels = row.findChildren(QLabel)
+    # все текстовые лейблы (имя, тело) — в режиме PlainText
+    plains = [lb for lb in labels if lb.textFormat() == Qt.PlainText]
+    texts = [lb.text() for lb in plains]
+    assert "<b>злой</b>" in texts
+    assert "<i>peer</i>" in texts
