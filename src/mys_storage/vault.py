@@ -214,4 +214,5 @@ def open_vault(db_path: str, password: bytes) -> Vault:
     meta["attempts"]["failed"] = 0
     meta["attempts"]["lockout_until"] = None
     sidecar.write_sidecar(meta_path, meta)
+    migrations.migrate(conn)
     return Vault(_LockedConnection(conn), db_path, meta, key)

@@ -112,12 +112,12 @@ class ConversationsRepo(_Base):
 
 class MessagesRepo(_Base):
     def add(self, conversation_id, *, direction, body, status, wire_seq=None,
-            client_msg_id=None) -> int:
+            client_msg_id=None, sender=None) -> int:
         now = time.time()
         cur = self._c.execute(
             "INSERT INTO messages(conversation_id, direction, body, status, wire_seq,"
-            " client_msg_id, sent_at, received_at) VALUES(?,?,?,?,?,?,?,?)",
-            (conversation_id, direction, body, status, wire_seq, client_msg_id,
+            " client_msg_id, sender, sent_at, received_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (conversation_id, direction, body, status, wire_seq, client_msg_id, sender,
              now if direction == "out" else None,
              now if direction == "in" else None),
         )

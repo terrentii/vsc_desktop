@@ -161,7 +161,7 @@ class ChatView(QListWidget):
         for m in messages:
             body = m["body"].decode("utf-8", "replace") if m["body"] is not None else ""
             own = m["direction"] == "out"
-            author = "я" if own else peer_label
+            author = "я" if own else (m.get("sender") or peer_label)
             item = QListWidgetItem(body)
             item.setData(_DIRECTION_ROLE, m["direction"])
             item.setData(_AUTHOR_ROLE, author)

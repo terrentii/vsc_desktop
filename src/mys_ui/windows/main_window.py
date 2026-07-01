@@ -43,6 +43,16 @@ class _CentralBridge(QObject):
     resumed = Signal(bool)
 
 
+class _P2PBridge(QObject):
+    """Мост из потока P2P-сервиса в UI-поток (см. ``_CentralBridge``)."""
+
+    message = Signal(int)
+    state = Signal(int, str)
+    error = Signal(object, str)
+    connected = Signal(int)
+    connect_failed = Signal(str)
+
+
 class MainWindow(QWidget):
     locked = Signal()
 
@@ -92,6 +102,19 @@ class MainWindow(QWidget):
             on_message=lambda cid, lid: self._bridge.message.emit(cid, lid),
             on_state_change=lambda st: self._bridge.state.emit(st),
             on_error=lambda exc: self._bridge.error.emit(str(exc)),
+        )
+
+        # Мост real-time децентрализованного (P2P) режима.
+        self._p2p_bridge = _P2PBridge()
+        self._p2p_bridge.message.connect(self._on_p2p_message)
+        self._p2p_bridge.state.connect(self._on_p2p_state)
+        self._p2p_bridge.error.connect(self._on_p2p_error)
+        self._p2p_bridge.connected.connect(self._on_p2p_connected)
+        self._p2p_bridge.connect_failed.connect(self._on_p2p_connect_failed)
+        self._c.add_p2p_observer(
+            on_message=lambda cid: self._p2p_bridge.message.emit(cid),
+            on_state_change=lambda cid, st: self._p2p_bridge.state.emit(cid, st),
+            on_error=lambda cid, exc: self._p2p_bridge.error.emit(cid, str(exc)),
         )
 
         self._sync_mode_ui()
@@ -291,8 +314,7 @@ class MainWindow(QWidget):
         if self._c.mode == DECENTRALIZED:
             dialog = PhraseDialog(self)
             if dialog.exec() == QDialog.Accepted and dialog.phrase():
-                self.add_conversation(dialog.phrase(), room_phrase=dialog.phrase())
-                self._set_status("Канал открыт")
+                self._start_p2p_session(dialog.phrase())
         else:
             title, ok = QInputDialog.getText(self, "Новый диалог", "Название:")
             if ok and title:
@@ -347,6 +369,50 @@ class MainWindow(QWidget):
 
     def _on_central_error(self, message: str) -> None:
         self._central_error = message
+
+    # --- real-time P2P-режима ---------------------------------------------------
+
+    def _start_p2p_session(self, phrase: str) -> None:
+        """Установить P2P-канал в фоновом потоке (хендшейк может занять секунды —
+        UI не должен зависать)."""
+        if not self._c.p2p_available():
+            QMessageBox.warning(self, "P2P недоступен", "P2P-сервис не сконфигурирован")
+            return
+        self._set_status("Подключение…")
+        threading.Thread(
+            target=self._p2p_connect_worker, args=(phrase,), name="mys-p2p-connect",
+            daemon=True,
+        ).start()
+
+    def _p2p_connect_worker(self, phrase: str) -> None:
+        try:
+            conv_id = self._c.create_conversation(phrase, room_phrase=phrase)
+        except Exception as exc:
+            self._p2p_bridge.connect_failed.emit(str(exc))
+            return
+        self._p2p_bridge.connected.emit(conv_id)
+
+    def _on_p2p_connected(self, conversation_id: int) -> None:
+        self.refresh_conversations()
+        self._set_status("Канал открыт")
+
+    def _on_p2p_connect_failed(self, message: str) -> None:
+        self._set_status("Ошибка подключения")
+        QMessageBox.warning(self, "P2P-канал не установлен", message)
+
+    def _on_p2p_message(self, conversation_id: int) -> None:
+        self.refresh_conversations()
+        if conversation_id == self._current:
+            self._show_messages(conversation_id)
+
+    def _on_p2p_state(self, conversation_id: int, state: str) -> None:
+        if conversation_id == self._current:
+            self._set_status(state)
+
+    def _on_p2p_error(self, conversation_id, message: str) -> None:
+        self._central_error = message
+        if conversation_id is None or conversation_id == self._current:
+            self._set_status("Ошибка P2P")
 
     def _open_settings(self) -> None:
         SettingsDialog(self._c, self).exec()

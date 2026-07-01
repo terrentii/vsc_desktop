@@ -144,7 +144,7 @@ class SyncEngine:
                 return None
         local_id = self._vault.messages.add(
             conv_id, direction="in", body=msg.body.encode("utf-8"),
-            status="received", wire_seq=msg.id,
+            status="received", wire_seq=msg.id, sender=msg.sender,
         )
         if self._on_message is not None:
             self._on_message(conv_id, local_id, msg)

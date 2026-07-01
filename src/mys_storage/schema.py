@@ -55,6 +55,11 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
         "ALTER TABLE messages ADD COLUMN client_msg_id TEXT",
         "CREATE INDEX idx_messages_conv_wire ON messages(conversation_id, wire_seq)",
     ]),
+    # v3 — имя отправителя входящих сообщений (централизованный режим,
+    # многопользовательские комнаты): сервер отдаёт его в RemoteMessage.sender.
+    (3, [
+        "ALTER TABLE messages ADD COLUMN sender TEXT",
+    ]),
 ]
 
 TARGET_VERSION = MIGRATIONS[-1][0]
