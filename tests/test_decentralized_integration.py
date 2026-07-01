@@ -8,6 +8,7 @@
 """
 
 import asyncio
+import os
 
 import pytest
 
@@ -88,6 +89,55 @@ async def test_two_clients_exchange_messages(tmp_path, allow_direct):
         assert "out" in b_dirs and "in" in b_dirs
         # Сервер не видит фразу/открытый текст — беседа помечена непрозрачным room_id.
         assert av.conversations.get(conv_a)["room_id"] == derive_room_params(phrase)[0]
+    finally:
+        await asyncio.to_thread(sa.stop)
+        await asyncio.to_thread(sb.stop)
+        await server.stop()
+
+
+async def test_two_clients_exchange_file_over_relay(tmp_path, monkeypatch):
+    """Файл реально проходит через websockets-relay без ошибок max_size — не
+    только по арифметической оценке из filetransfer.py, но на практике."""
+    from mys_decentralized import filetransfer as ft
+
+    monkeypatch.setattr(ft, "CHUNK_SIZE", 4096)
+    server, url = await _start_server()
+    av = create_vault(str(tmp_path / "a.db"), b"pw-a", params=FAST)
+    bv = create_vault(str(tmp_path / "b.db"), b"pw-b", params=FAST)
+
+    recv_a: list[bytes] = []
+    recv_b: list[bytes] = []
+    sa = P2PService(
+        av, url, allow_direct=False, connect_timeout=3,
+        on_message=lambda _cid, body: recv_a.append(body),
+    )
+    sb = P2PService(
+        bv, url, allow_direct=False, connect_timeout=3,
+        on_message=lambda _cid, body: recv_b.append(body),
+    )
+    sa.start()
+    sb.start()
+    try:
+        phrase = "фраза для передачи файла"
+        conv_a, conv_b = await asyncio.gather(
+            asyncio.to_thread(sa.start_session, phrase),
+            asyncio.to_thread(sb.start_session, phrase),
+        )
+        if sa.role_of(conv_a) == Role.INITIATOR:
+            init, init_conv = sa, conv_a
+            resp, resp_conv, resp_recv, resp_vault = sb, conv_b, recv_b, bv
+        else:
+            init, init_conv = sb, conv_b
+            resp, resp_conv, resp_recv, resp_vault = sa, conv_a, recv_a, av
+
+        data = os.urandom(30_000)  # несколько чанков по 4 КиБ
+        await asyncio.to_thread(init.send_file, init_conv, "photo.bin", "image/x-test", data)
+        await _wait_for(lambda: resp_recv == [data])
+
+        rows = resp_vault.messages.list(resp_conv)
+        assert rows[-1]["kind"] == "file"
+        assert rows[-1]["filename"] == "photo.bin"
+        assert rows[-1]["body"] == data
     finally:
         await asyncio.to_thread(sa.stop)
         await asyncio.to_thread(sb.stop)

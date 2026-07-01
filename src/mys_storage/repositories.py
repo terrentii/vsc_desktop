@@ -112,14 +112,17 @@ class ConversationsRepo(_Base):
 
 class MessagesRepo(_Base):
     def add(self, conversation_id, *, direction, body, status, wire_seq=None,
-            client_msg_id=None, sender=None) -> int:
+            client_msg_id=None, sender=None, kind="text", filename=None,
+            mime_type=None) -> int:
         now = time.time()
         cur = self._c.execute(
             "INSERT INTO messages(conversation_id, direction, body, status, wire_seq,"
-            " client_msg_id, sender, sent_at, received_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            " client_msg_id, sender, sent_at, received_at, kind, filename, mime_type)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (conversation_id, direction, body, status, wire_seq, client_msg_id, sender,
              now if direction == "out" else None,
-             now if direction == "in" else None),
+             now if direction == "in" else None,
+             kind, filename, mime_type),
         )
         self._c.commit()
         return cur.lastrowid
@@ -197,3 +200,7 @@ class RatchetRepo(_Base):
         if row is None:
             return None
         return ratchet.deserialize_state(row[0])
+
+    def delete(self, conversation_id: int) -> None:
+        self._c.execute("DELETE FROM ratchet_state WHERE conversation_id=?", (conversation_id,))
+        self._c.commit()

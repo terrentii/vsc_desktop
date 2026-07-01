@@ -3,6 +3,8 @@
 Строку заголовка с системными кнопками даёт безрамочный хром
 (``windows.frameless.FramelessWindow``) — здесь её нет."""
 
+import mimetypes
+import os
 import threading
 
 from PySide6.QtCore import QObject, Qt, Signal
@@ -19,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from mys_centralized.errors import CentralizedError
+from mys_decentralized import filetransfer
 
 from mys_ui import theme
 from mys_ui.controller import CENTRALIZED, DECENTRALIZED
@@ -51,6 +54,8 @@ class _P2PBridge(QObject):
     error = Signal(object, str)
     connected = Signal(int)
     connect_failed = Signal(str)
+    file_sent = Signal(int)
+    file_error = Signal(str)
 
 
 class MainWindow(QWidget):
@@ -90,7 +95,9 @@ class MainWindow(QWidget):
         self.top.login_requested.connect(self._central_login)
         self.conversations.conversation_selected.connect(self._on_select)
         self.conversations.new_conversation_requested.connect(self._on_new)
+        self.conversations.conversation_delete_requested.connect(self._on_delete_conversation)
         self.input.message_submitted.connect(self._on_send)
+        self.input.file_submitted.connect(self._on_send_file)
 
         # Мост real-time централизованного режима.
         self._bridge = _CentralBridge()
@@ -111,6 +118,8 @@ class MainWindow(QWidget):
         self._p2p_bridge.error.connect(self._on_p2p_error)
         self._p2p_bridge.connected.connect(self._on_p2p_connected)
         self._p2p_bridge.connect_failed.connect(self._on_p2p_connect_failed)
+        self._p2p_bridge.file_sent.connect(self._on_file_sent)
+        self._p2p_bridge.file_error.connect(self._on_file_error)
         self._c.add_p2p_observer(
             on_message=lambda cid: self._p2p_bridge.message.emit(cid),
             on_state_change=lambda cid, st: self._p2p_bridge.state.emit(cid, st),
@@ -413,6 +422,67 @@ class MainWindow(QWidget):
         self._central_error = message
         if conversation_id is None or conversation_id == self._current:
             self._set_status("Ошибка P2P")
+
+    # --- отправка/сохранение файлов (P2P) ---------------------------------------
+
+    def _on_send_file(self, path: str) -> None:
+        if self._current is None:
+            return
+        if self._c.mode != DECENTRALIZED:
+            QMessageBox.information(
+                self, "Недоступно", "Отправка файлов доступна только в P2P-режиме"
+            )
+            return
+        conversation_id = self._current
+        threading.Thread(
+            target=self._send_file_worker, args=(conversation_id, path),
+            name="mys-send-file", daemon=True,
+        ).start()
+        self._set_status("Отправка файла…")
+
+    def _send_file_worker(self, conversation_id: int, path: str) -> None:
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+            if len(data) > filetransfer.MAX_FILE_SIZE:
+                raise ValueError(
+                    f"Файл больше {filetransfer.MAX_FILE_SIZE // (1024 * 1024)} МБ"
+                )
+            filename = os.path.basename(path)
+            mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+            self._c.send_file(conversation_id, filename, mime, data)
+        except Exception as exc:
+            self._p2p_bridge.file_error.emit(str(exc))
+            return
+        self._p2p_bridge.file_sent.emit(conversation_id)
+
+    def _on_file_sent(self, conversation_id: int) -> None:
+        self.refresh_conversations()
+        if conversation_id == self._current:
+            self._show_messages(conversation_id)
+        self._set_status("Файл отправлен")
+
+    def _on_file_error(self, message: str) -> None:
+        self._set_status("Ошибка отправки файла")
+        QMessageBox.warning(self, "Файл не отправлен", message)
+
+    # --- удаление диалога --------------------------------------------------------
+
+    def _on_delete_conversation(self, conversation_id: int) -> None:
+        title = self._peer_label(conversation_id)
+        if QMessageBox.question(
+            self, "Удалить диалог",
+            f"Удалить «{title}» и всю историю без возможности восстановления?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ) != QMessageBox.Yes:
+            return
+        self._c.delete_conversation(conversation_id)
+        if self._current == conversation_id:
+            self._current = None
+            self.chat.clear()
+            self._update_chat_header()
+        self.refresh_conversations()
+        self._set_status("Диалог удалён")
 
     def _open_settings(self) -> None:
         SettingsDialog(self._c, self).exec()

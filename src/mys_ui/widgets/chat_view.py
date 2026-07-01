@@ -13,7 +13,12 @@ import time
 
 from PySide6.QtCore import QRect, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QPen
-from PySide6.QtWidgets import QListWidget, QListWidgetItem, QStyledItemDelegate
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QListWidget,
+    QListWidgetItem,
+    QStyledItemDelegate,
+)
 
 from mys_ui import theme
 
@@ -21,6 +26,8 @@ _DIRECTION_ROLE = Qt.UserRole + 1
 _TIME_ROLE = Qt.UserRole + 2
 _AUTHOR_ROLE = Qt.UserRole + 3
 _AVATAR_ROLE = Qt.UserRole + 4
+_FILE_BODY_ROLE = Qt.UserRole + 5
+_FILENAME_ROLE = Qt.UserRole + 6
 
 _PAD_L = 20
 _PAD_R = 20
@@ -132,6 +139,21 @@ def _fmt_time(epoch) -> str:
         return ""
 
 
+def _fmt_size(n: int) -> str:
+    if n >= 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} МБ"
+    if n >= 1024:
+        return f"{n / 1024:.0f} КБ"
+    return f"{n} Б"
+
+
+def _display_text(m: dict) -> str:
+    if m.get("kind") == "file":
+        size = len(m["body"]) if m["body"] is not None else 0
+        return f"📎 {m.get('filename') or 'файл'} ({_fmt_size(size)})"
+    return m["body"].decode("utf-8", "replace") if m["body"] is not None else ""
+
+
 def _avatar_for(author: str, own: bool) -> str:
     if own:
         return "я"
@@ -155,17 +177,31 @@ class ChatView(QListWidget):
         self.setUniformItemSizes(False)
         self.setSpacing(0)
         self.setWordWrap(True)
+        self.itemDoubleClicked.connect(self._on_double_click)
 
     def show_messages(self, messages: list[dict], *, peer_label: str = "Собеседник") -> None:
         self.clear()
         for m in messages:
-            body = m["body"].decode("utf-8", "replace") if m["body"] is not None else ""
             own = m["direction"] == "out"
             author = "я" if own else (m.get("sender") or peer_label)
-            item = QListWidgetItem(body)
+            item = QListWidgetItem(_display_text(m))
             item.setData(_DIRECTION_ROLE, m["direction"])
             item.setData(_AUTHOR_ROLE, author)
             item.setData(_TIME_ROLE, _fmt_time(m.get("sent_at") or m.get("received_at")))
             item.setData(_AVATAR_ROLE, _avatar_for(author, own))
+            if m.get("kind") == "file":
+                item.setData(_FILE_BODY_ROLE, m["body"])
+                item.setData(_FILENAME_ROLE, m.get("filename"))
             self.addItem(item)
         self.scrollToBottom()
+
+    def _on_double_click(self, item: QListWidgetItem) -> None:
+        body = item.data(_FILE_BODY_ROLE)
+        if body is None:
+            return
+        filename = item.data(_FILENAME_ROLE) or "файл"
+        path, _ = QFileDialog.getSaveFileName(self, "Сохранить файл", filename)
+        if not path:
+            return
+        with open(path, "wb") as fh:
+            fh.write(body)

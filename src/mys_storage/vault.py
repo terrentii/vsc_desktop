@@ -156,14 +156,15 @@ class Vault:
         self._key.wipe()
         self._key = new_key
 
-    def receive_message(self, conversation_id: int, *, body: bytes, new_state, wire_seq=None) -> int:
+    def receive_message(self, conversation_id: int, *, body: bytes, new_state, wire_seq=None,
+                         kind="text", filename=None, mime_type=None) -> int:
         blob = _ratchet.serialize_state(new_state)  # сериализуем ДО транзакции (упадёт раньше записи)
         now = time.time()
         with self._conn:  # атомарно: commit при успехе, rollback при исключении
             cur = self._conn.execute(
-                "INSERT INTO messages(conversation_id, direction, body, status, wire_seq, received_at)"
-                " VALUES(?,?,?,?,?,?)",
-                (conversation_id, "in", body, "received", wire_seq, now),
+                "INSERT INTO messages(conversation_id, direction, body, status, wire_seq,"
+                " received_at, kind, filename, mime_type) VALUES(?,?,?,?,?,?,?,?,?)",
+                (conversation_id, "in", body, "received", wire_seq, now, kind, filename, mime_type),
             )
             self._conn.execute(
                 "INSERT INTO ratchet_state(conversation_id, state_blob, updated_at) VALUES(?,?,?)"

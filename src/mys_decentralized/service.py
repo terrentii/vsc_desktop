@@ -141,6 +141,16 @@ class P2PService:
     def send(self, conversation_id: int, text: str, *, timeout: float = 15.0) -> None:
         self._submit(self._send(conversation_id, text), timeout=timeout)
 
+    def send_file(
+        self, conversation_id: int, filename: str, mime_type: str, data: bytes,
+        *, timeout: float = 60.0,
+    ) -> None:
+        """Отправить файл через активную сессию беседы (блокирует до отправки всех
+        чанков). Таймаут выше, чем у ``send`` — до полусотни чанков на 50 МБ."""
+        self._submit(
+            self._send_file(conversation_id, filename, mime_type, data), timeout=timeout
+        )
+
     def stop_session(self, conversation_id: int, *, timeout: float = 10.0) -> None:
         self._submit(self._stop_session(conversation_id), timeout=timeout)
 
@@ -214,6 +224,14 @@ class P2PService:
         if session is None:
             raise KeyError(f"нет активной сессии для беседы {conversation_id}")
         await session.send(text)
+
+    async def _send_file(
+        self, conversation_id: int, filename: str, mime_type: str, data: bytes
+    ) -> None:
+        session = self._sessions.get(conversation_id)
+        if session is None:
+            raise KeyError(f"нет активной сессии для беседы {conversation_id}")
+        await session.send_file(filename, mime_type, data)
 
     async def _stop_session(self, conversation_id: int) -> None:
         session = self._sessions.pop(conversation_id, None)

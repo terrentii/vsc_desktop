@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QVBoxLayout,
     QWidget,
 )
@@ -17,6 +18,7 @@ from mys_ui.controller import DECENTRALIZED
 class ConversationList(QWidget):
     conversation_selected = Signal(int)
     new_conversation_requested = Signal()
+    conversation_delete_requested = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -44,6 +46,8 @@ class ConversationList(QWidget):
         self.list = QListWidget()
         self.list.setObjectName("ConvList")
         self.list.setFont(theme.mono_font(16))
+        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._on_context_menu)
         layout.addWidget(self.list, 1)
 
         from mys_ui.widgets.brutal import BrutalButton
@@ -76,3 +80,13 @@ class ConversationList(QWidget):
 
     def _on_item(self, item: QListWidgetItem) -> None:
         self.conversation_selected.emit(item.data(Qt.UserRole))
+
+    def _on_context_menu(self, pos) -> None:
+        item = self.list.itemAt(pos)
+        if item is None:
+            return
+        menu = QMenu(self)
+        act_delete = menu.addAction("Удалить диалог")
+        chosen = menu.exec(self.list.mapToGlobal(pos))
+        if chosen == act_delete:
+            self.conversation_delete_requested.emit(item.data(Qt.UserRole))

@@ -34,3 +34,10 @@ def test_migrate_is_idempotent():
         "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='messages'"
     ).fetchone()[0]
     assert count == 1
+
+
+def test_migrate_adds_file_columns_to_messages():
+    conn = _conn()
+    migrations.migrate(conn)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+    assert {"kind", "filename", "mime_type"} <= cols

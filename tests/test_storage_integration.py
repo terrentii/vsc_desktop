@@ -73,3 +73,20 @@ def test_out_of_order_delivery_persisted(tmp_path):
     assert recv(b1) == b"m1"
     assert recv(b2) == b"m2"
     av.close(); bv.close()
+
+
+def test_receive_message_file_kind_round_trips(tmp_path):
+    v = create_vault(str(tmp_path / "v.db"), b"pw", params=FAST)
+    conv = v.conversations.add(mode="decentralized")
+    _priv, pub = primitives.generate_x25519_keypair()
+    state = ratchet.ratchet_init_bob(b"k" * 32, (_priv, pub))
+    v.receive_message(
+        conv, body=b"file-bytes", new_state=state,
+        kind="file", filename="doc.pdf", mime_type="application/pdf",
+    )
+    row = v.messages.list(conv)[0]
+    assert row["kind"] == "file"
+    assert row["filename"] == "doc.pdf"
+    assert row["mime_type"] == "application/pdf"
+    assert row["body"] == b"file-bytes"
+    v.close()

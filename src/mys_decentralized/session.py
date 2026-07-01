@@ -5,9 +5,14 @@
 (:mod:`mys_storage`) хранит сообщения и состояние ratchet per-conversation.
 
 - Отправка: ``DATA{ envelope.seal(...) }`` в транспорт, затем запись исходящего
-  и сохранение состояния ratchet.
+  и сохранение состояния ratchet. Содержимое внутри ``seal`` тегируется байтом
+  kind (:mod:`.filetransfer`) — текст или файловые META/CHUNK кадры; формат
+  содержимого, не wire-``MsgType`` (тот не меняется).
 - Приём: ``envelope.open_(...)`` → plaintext, атомарная запись через
   ``Vault.receive_message`` (сообщение + новое состояние одной транзакцией).
+  Файлы пересобираются в памяти по ``transfer_id`` и персистятся одной строкой
+  только после получения всех чанков и проверки sha256 — промежуточные
+  META/CHUNK кадры лишь двигают и сохраняют ratchet-state (как prime-кадр).
 - Битый/повторённый ``DATA`` отбрасывается (ratchet не двигается), сессия жива.
 - Реконнект: если состояние ratchet для комнаты уже в vault — сессия
   **возобновляет** его (PAKE на реконнекте лишь заново аутентифицирует пира);
@@ -18,10 +23,13 @@
 """
 
 import asyncio
+import hashlib
+import os
 from collections.abc import Callable
 
 from mys_crypto import envelope
 
+from . import filetransfer
 from .errors import TransportError
 from .protocol import Data, decode_message, encode_message
 from .transport import Transport
@@ -51,8 +59,13 @@ class Session:
         self._recv_task: asyncio.Task | None = None
         self._running = False
         # Исходящие, накопленные пока нельзя слать (RESPONDER до первого входящего):
-        # (local_message_id, plaintext). Флашатся, как только появится cks.
+        # (local_message_id, kind-тегированный payload). Флашатся, как только
+        # появится cks. Файлы в очередь не встают — см. send_file().
         self._outbox: list[tuple[int, bytes]] = []
+        # Пересборка входящих файлов: transfer_id -> {"meta": FileMeta|None,
+        # "chunks": {index: bytes}}. Незавершённые трансферы живут не дольше
+        # сессии (см. close()) — best-effort, как и для обычных сообщений.
+        self._pending_files: dict[bytes, dict] = {}
 
     @property
     def can_send(self) -> bool:
@@ -76,18 +89,66 @@ class Session:
         data = text.encode("utf-8")
         if not data:
             return  # пустой payload зарезервирован под prime — не шлём как контент
+        payload = bytes([filetransfer.KIND_TEXT]) + data
         async with self._lock:
             if not self.can_send:
                 local_id = self._vault.messages.add(
                     self._conv, direction="out", body=data, status="pending"
                 )
-                self._outbox.append((local_id, data))
+                self._outbox.append((local_id, payload))
                 return
-            await self._seal_and_send(data)
+            await self._seal_and_send(payload)
             self._vault.messages.add(
                 self._conv, direction="out", body=data, status="sent"
             )
             self._vault.ratchet.save_state(self._conv, self._state)
+
+    async def send_file(self, filename: str, mime_type: str, data: bytes) -> int:
+        """Отправить файл (META-кадр + N чанков); вернуть local message id.
+
+        Требует ``can_send`` (RESPONDER до первого входящего не может отправлять
+        файлы в v1 — бросает ``RuntimeError``; в отличие от ``send()``, файл в
+        ``_outbox`` не ставится: очередь рассчитана на цельные независимые
+        сообщения, а файл — упорядоченная группа кадров, расширять очередь под
+        групповую семантику ради узкого предпраймингового окна не стоит).
+
+        Состояние ratchet сохраняется после КАЖДОГО отправленного кадра (не
+        только в конце): цепочка отправки двигается на каждый ``envelope.seal``,
+        и если процесс упадёт посреди передачи, при рестарте нельзя воскресить
+        стухший ``cks`` — это привело бы к повторному использованию уже
+        использованного ключа ratchet.
+        """
+        if len(data) > filetransfer.MAX_FILE_SIZE:
+            raise ValueError(f"файл превышает лимит {filetransfer.MAX_FILE_SIZE} байт")
+        async with self._lock:
+            if not self.can_send:
+                raise RuntimeError(
+                    "канал ещё не готов для отправки файла (примите первое сообщение)"
+                )
+            transfer_id = os.urandom(filetransfer.TRANSFER_ID_LEN)
+            chunks = filetransfer.split_chunks(data)
+            meta = filetransfer.FileMeta(
+                transfer_id=transfer_id,
+                total_size=len(data),
+                chunk_size=filetransfer.CHUNK_SIZE,
+                chunk_count=len(chunks),
+                sha256=hashlib.sha256(data).digest(),
+                mime_type=mime_type,
+                filename=filename,
+            )
+            meta_payload = bytes([filetransfer.KIND_FILE_META]) + filetransfer.encode_file_meta(meta)
+            await self._seal_and_send(meta_payload)
+            self._vault.ratchet.save_state(self._conv, self._state)
+            for idx, chunk in enumerate(chunks):
+                fc = filetransfer.FileChunk(transfer_id=transfer_id, index=idx, data=chunk)
+                chunk_payload = bytes([filetransfer.KIND_FILE_CHUNK]) + filetransfer.encode_file_chunk(fc)
+                await self._seal_and_send(chunk_payload)
+                self._vault.ratchet.save_state(self._conv, self._state)
+            local_id = self._vault.messages.add(
+                self._conv, direction="out", body=data, status="sent",
+                kind="file", filename=filename, mime_type=mime_type,
+            )
+        return local_id
 
     async def send_prime(self) -> None:
         """Отправить prime-кадр (пустой payload), чтобы продвинуть ratchet пира.
@@ -138,19 +199,77 @@ class Session:
                 # битый sealed или replay: ratchet не двинулся (decrypt атомарен),
                 # сессия продолжает работать.
                 return
+            persist = None  # (kind, filename, mime_type, body) | None
             if plaintext == b"":
                 # prime-кадр: продвинул наш ratchet (теперь есть cks), но это не
                 # контент — не персистим сообщение, лишь сохраняем состояние.
                 self._vault.ratchet.save_state(self._conv, self._state)
             else:
-                # Атомарно: входящее сообщение + новое состояние ratchet.
-                self._vault.receive_message(
-                    self._conv, body=plaintext, new_state=self._state
-                )
+                try:
+                    persist = self._dispatch_content(plaintext)
+                except Exception:
+                    # битый/невалидный файловый кадр — отбросить, как и
+                    # обычный DATA-кадр выше; сессия жива, ratchet уже
+                    # продвинут (decrypt прошёл), состояние всё же сохраняем.
+                    persist = None
+                if persist is None:
+                    self._vault.ratchet.save_state(self._conv, self._state)
+                else:
+                    kind, filename, mime_type, body = persist
+                    self._vault.receive_message(
+                        self._conv, body=body, new_state=self._state,
+                        kind=kind, filename=filename, mime_type=mime_type,
+                    )
             # Первое входящее могло открыть отправляющую цепочку — флашим очередь.
             await self._flush_outbox_locked()
-        if plaintext != b"" and self._on_message is not None:
-            self._on_message(plaintext)
+        if persist is not None and self._on_message is not None:
+            self._on_message(persist[3])
+
+    def _dispatch_content(self, plaintext: bytes):
+        """Разобрать kind-тегированный plaintext; вернуть persist-кортеж или
+        ``None``, если это ещё не завершённый файловый трансфер (или прайм,
+        сюда не попадающий — см. вызывающий код)."""
+        kind, body = plaintext[0], plaintext[1:]
+        if kind == filetransfer.KIND_TEXT:
+            return ("text", None, None, body)
+        if kind == filetransfer.KIND_FILE_META:
+            return self._on_file_meta(body)
+        if kind == filetransfer.KIND_FILE_CHUNK:
+            return self._on_file_chunk(body)
+        return None  # неизвестный kind — форвард-совместимость, тихо отбросить
+
+    def _on_file_meta(self, body: bytes):
+        meta = filetransfer.decode_file_meta(body)
+        filetransfer.validate_meta(meta)
+        entry = self._pending_files.setdefault(
+            meta.transfer_id, {"meta": None, "chunks": {}}
+        )
+        entry["meta"] = meta
+        return self._maybe_complete(meta.transfer_id)
+
+    def _on_file_chunk(self, body: bytes):
+        chunk = filetransfer.decode_file_chunk(body)
+        entry = self._pending_files.setdefault(
+            chunk.transfer_id, {"meta": None, "chunks": {}}
+        )
+        entry["chunks"][chunk.index] = chunk.data
+        return self._maybe_complete(chunk.transfer_id)
+
+    def _maybe_complete(self, transfer_id: bytes):
+        entry = self._pending_files.get(transfer_id)
+        if entry is None or entry["meta"] is None:
+            return None
+        meta = entry["meta"]
+        if len(entry["chunks"]) < meta.chunk_count:
+            return None  # ждём ещё чанки (порядок прихода не важен)
+        try:
+            full = b"".join(entry["chunks"][i] for i in range(meta.chunk_count))
+        except KeyError:
+            return None  # дубли/пропуски вместо честного набора 0..chunk_count-1
+        del self._pending_files[transfer_id]
+        if hashlib.sha256(full).digest() != meta.sha256:
+            return None  # повреждённый трансфер — отбросить, сессия жива
+        return ("file", meta.filename, meta.mime_type, full)
 
     async def close(self) -> None:
         self._running = False
@@ -161,6 +280,7 @@ class Session:
             except asyncio.CancelledError:
                 pass
             self._recv_task = None
+        self._pending_files.clear()
         await self._transport.close()
 
 

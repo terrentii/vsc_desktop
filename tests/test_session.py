@@ -1,10 +1,14 @@
 """Защищённая сессия: round-trip, персист/реконнект, битый/повторённый DATA."""
 
 import asyncio
+import hashlib
+
+import pytest
 
 from mys_crypto import envelope
 from mys_crypto.primitives import generate_x25519_keypair
 from mys_crypto.ratchet import ratchet_init_alice, ratchet_init_bob
+from mys_decentralized import filetransfer as ft
 from mys_decentralized.protocol import Data, encode_message
 from mys_decentralized.session import Session, open_session
 from mys_decentralized.transport import InMemoryTransport, Transport
@@ -179,3 +183,193 @@ async def test_corrupted_and_replayed_data_dropped(tmp_path):
 
     await sa.close()
     await sb.close()
+
+
+# --- передача файлов -----------------------------------------------------------
+
+async def test_session_send_file_roundtrip_reassembles(tmp_path, monkeypatch):
+    monkeypatch.setattr(ft, "CHUNK_SIZE", 16)  # маленькие чанки для скорости теста
+    av, ca, bv, cb = _two_vaults(tmp_path)
+    sk = b"k" * 32
+    a_state, b_state = _seed_states(sk)
+
+    ta, tb = InMemoryTransport.connected_pair()
+    got_b: list[bytes] = []
+    sa = open_session(av, ca, ta, sk, a_state)
+    sb = open_session(bv, cb, tb, sk, b_state, on_message=got_b.append)
+    sa.start()
+    sb.start()
+
+    # Alice — INITIATOR, может слать сразу.
+    data = bytes(range(256)) * 3  # 768 байт -> 48 чанков по 16 байт
+    await sa.send_file("report.txt", "text/plain", data)
+    await _wait_for(lambda: got_b == [data])
+
+    rows = bv.messages.list(cb)
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "file"
+    assert rows[0]["filename"] == "report.txt"
+    assert rows[0]["mime_type"] == "text/plain"
+    assert rows[0]["body"] == data
+    assert rows[0]["direction"] == "in"
+
+    await sa.close()
+    await sb.close()
+
+
+async def test_session_send_file_out_of_order_chunks_reassemble(tmp_path, monkeypatch):
+    monkeypatch.setattr(ft, "CHUNK_SIZE", 8)
+    av, ca, bv, cb = _two_vaults(tmp_path)
+    sk = b"k" * 32
+    a_state, b_state = _seed_states(sk)
+
+    ta, tb = InMemoryTransport.connected_pair()
+    got_b: list[bytes] = []
+    sa = open_session(av, ca, ta, sk, a_state)
+    sb = open_session(bv, cb, tb, sk, b_state, on_message=got_b.append)
+    sa.start()
+    sb.start()
+
+    data = b"0123456789abcdef" * 2  # 32 байта -> 4 чанка по 8 байт
+    async with sa._lock:
+        chunks = ft.split_chunks(data)
+        meta = ft.FileMeta(
+            transfer_id=b"z" * ft.TRANSFER_ID_LEN, total_size=len(data),
+            chunk_size=ft.CHUNK_SIZE, chunk_count=len(chunks),
+            sha256=hashlib.sha256(data).digest(), mime_type="application/octet-stream",
+            filename="blob.bin",
+        )
+        # Отправляем чанки в обратном порядке, затем META последней.
+        for idx in reversed(range(len(chunks))):
+            fc = ft.FileChunk(transfer_id=meta.transfer_id, index=idx, data=chunks[idx])
+            payload = bytes([ft.KIND_FILE_CHUNK]) + ft.encode_file_chunk(fc)
+            await sa._seal_and_send(payload)
+        meta_payload = bytes([ft.KIND_FILE_META]) + ft.encode_file_meta(meta)
+        await sa._seal_and_send(meta_payload)
+        sa._vault.ratchet.save_state(sa._conv, sa._state)
+
+    await _wait_for(lambda: got_b == [data])
+    rows = bv.messages.list(cb)
+    assert rows[0]["kind"] == "file" and rows[0]["body"] == data
+
+    await sa.close()
+    await sb.close()
+
+
+async def test_session_send_file_bad_checksum_dropped(tmp_path, monkeypatch):
+    monkeypatch.setattr(ft, "CHUNK_SIZE", 8)
+    av, ca, bv, cb = _two_vaults(tmp_path)
+    sk = b"k" * 32
+    a_state, b_state = _seed_states(sk)
+
+    ta, tb = InMemoryTransport.connected_pair()
+    got_b: list[bytes] = []
+    sa = open_session(av, ca, ta, sk, a_state)
+    sb = open_session(bv, cb, tb, sk, b_state, on_message=got_b.append)
+    sa.start()
+    sb.start()
+
+    data = b"corrupted-data!!"
+    async with sa._lock:
+        chunks = ft.split_chunks(data)
+        meta = ft.FileMeta(
+            transfer_id=b"y" * ft.TRANSFER_ID_LEN, total_size=len(data),
+            chunk_size=ft.CHUNK_SIZE, chunk_count=len(chunks),
+            sha256=b"\x00" * 32,  # заведомо неверная контрольная сумма
+            mime_type="application/octet-stream", filename="bad.bin",
+        )
+        meta_payload = bytes([ft.KIND_FILE_META]) + ft.encode_file_meta(meta)
+        await sa._seal_and_send(meta_payload)
+        for idx, chunk in enumerate(chunks):
+            fc = ft.FileChunk(transfer_id=meta.transfer_id, index=idx, data=chunk)
+            payload = bytes([ft.KIND_FILE_CHUNK]) + ft.encode_file_chunk(fc)
+            await sa._seal_and_send(payload)
+        sa._vault.ratchet.save_state(sa._conv, sa._state)
+
+    await asyncio.sleep(0.05)
+    assert got_b == []
+    assert bv.messages.list(cb) == []
+
+    # Сессия по-прежнему жива.
+    await sa.send("still-alive")
+    await _wait_for(lambda: got_b == [b"still-alive"])
+
+    await sa.close()
+    await sb.close()
+
+
+async def test_send_file_raises_when_not_primed(tmp_path):
+    av, ca, bv, cb = _two_vaults(tmp_path)
+    sk = b"k" * 32
+    a_state, b_state = _seed_states(sk)
+
+    ta, tb = InMemoryTransport.connected_pair()
+    sa = open_session(av, ca, ta, sk, a_state)  # INITIATOR
+    sb = open_session(bv, cb, tb, sk, b_state)  # RESPONDER
+    sa.start()
+    sb.start()
+
+    assert sb.can_send is False
+    with pytest.raises(RuntimeError):
+        await sb.send_file("x.txt", "text/plain", b"data")
+    assert bv.messages.list(cb) == []
+
+    await sa.close()
+    await sb.close()
+
+
+async def test_send_file_rejects_oversized(tmp_path, monkeypatch):
+    monkeypatch.setattr(ft, "MAX_FILE_SIZE", 10)
+    av, ca, bv, cb = _two_vaults(tmp_path)
+    sk = b"k" * 32
+    a_state, b_state = _seed_states(sk)
+
+    ta, tb = InMemoryTransport.connected_pair()
+    sa = open_session(av, ca, ta, sk, a_state)
+    sb = open_session(bv, cb, tb, sk, b_state)
+    sa.start()
+    sb.start()
+
+    with pytest.raises(ValueError):
+        await sa.send_file("big.bin", "application/octet-stream", b"x" * 11)
+    assert av.messages.list(ca) == []
+
+    await sa.close()
+    await sb.close()
+
+
+async def test_close_clears_pending_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(ft, "CHUNK_SIZE", 8)
+    av, ca, bv, cb = _two_vaults(tmp_path)
+    sk = b"k" * 32
+    a_state, b_state = _seed_states(sk)
+
+    ta, tb = InMemoryTransport.connected_pair()
+    sa = open_session(av, ca, ta, sk, a_state)
+    sb = open_session(bv, cb, tb, sk, b_state)
+    sa.start()
+    sb.start()
+
+    data = b"0123456789abcdef"
+    async with sa._lock:
+        chunks = ft.split_chunks(data)
+        assert len(chunks) == 2
+        meta = ft.FileMeta(
+            transfer_id=b"w" * ft.TRANSFER_ID_LEN, total_size=len(data),
+            chunk_size=ft.CHUNK_SIZE, chunk_count=len(chunks),
+            sha256=b"0" * 32, mime_type="x", filename="f",
+        )
+        meta_payload = bytes([ft.KIND_FILE_META]) + ft.encode_file_meta(meta)
+        await sa._seal_and_send(meta_payload)
+        # Только первый чанк — трансфер остаётся незавершённым у Bob.
+        fc = ft.FileChunk(transfer_id=meta.transfer_id, index=0, data=chunks[0])
+        payload = bytes([ft.KIND_FILE_CHUNK]) + ft.encode_file_chunk(fc)
+        await sa._seal_and_send(payload)
+        sa._vault.ratchet.save_state(sa._conv, sa._state)
+
+    await asyncio.sleep(0.05)
+    assert sb._pending_files != {}
+    await sb.close()
+    assert sb._pending_files == {}
+
+    await sa.close()

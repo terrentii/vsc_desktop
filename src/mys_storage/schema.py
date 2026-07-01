@@ -60,6 +60,12 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
     (3, [
         "ALTER TABLE messages ADD COLUMN sender TEXT",
     ]),
+    # v4 — файлы в P2P: тип сообщения и метаданные вложения.
+    (4, [
+        "ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'",
+        "ALTER TABLE messages ADD COLUMN filename TEXT",
+        "ALTER TABLE messages ADD COLUMN mime_type TEXT",
+    ]),
 ]
 
 TARGET_VERSION = MIGRATIONS[-1][0]

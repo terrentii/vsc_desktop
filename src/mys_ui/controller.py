@@ -116,6 +116,31 @@ class AppController:
             conversation_id, direction="out", body=text.encode("utf-8"), status="local"
         )
 
+    def send_file(self, conversation_id: int, filename: str, mime_type: str, data: bytes) -> int | None:
+        """Аналог send_message для файлов — только P2P (см. запрос пользователя).
+
+        Активная P2P-сессия персистит файл сама (session.send_file); без неё —
+        локальный фолбэк, чтобы файл хотя бы не терялся молча из истории."""
+        if self._service is not None and self._service.has_session(conversation_id):
+            self._service.send_file(conversation_id, filename, mime_type, data)
+            return None
+        return self.vault.messages.add(
+            conversation_id, direction="out", body=data, status="local",
+            kind="file", filename=filename, mime_type=mime_type,
+        )
+
+    def delete_conversation(self, conversation_id: int) -> None:
+        """Удалить беседу целиком: сессия -> сообщения -> ratchet-состояние -> беседа.
+
+        Сначала останавливаем активную P2P-сессию (если есть) — иначе фоновый
+        recv-loop сервиса (свой поток) мог бы попытаться писать в уже удалённые
+        строки, пока controller (поток UI) их стирает."""
+        if self._service is not None and self._service.has_session(conversation_id):
+            self._service.stop_session(conversation_id)
+        self.vault.messages.delete_for_conversation(conversation_id)
+        self.vault.ratchet.delete(conversation_id)
+        self.vault.conversations.delete(conversation_id)
+
     def change_password(self, old: bytes, new: bytes) -> None:
         self.vault.change_password(old, new)
 

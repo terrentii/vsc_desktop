@@ -420,6 +420,26 @@ QCheckBox::indicator {{
 }}
 QCheckBox::indicator:checked {{ background: {t['accent']}; }}
 
+/* ---- контекстное меню (напр. удаление диалога) ---- */
+QMenu {{
+    background: {t['surface']};
+    color: {t['text']};
+    border: 1px solid {t['line']};
+    padding: 4px 0;
+}}
+QMenu::item {{
+    padding: 8px 16px;
+}}
+QMenu::item:selected {{
+    background: {t['accentSoft']};
+    color: {t['text']};
+}}
+QMenu::separator {{
+    height: 1px;
+    background: {t['border2']};
+    margin: 4px 0;
+}}
+
 /* ---- скроллбары ---- */
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
 QScrollBar::handle:vertical {{ background: {t['border2']}; min-height: 24px; }}

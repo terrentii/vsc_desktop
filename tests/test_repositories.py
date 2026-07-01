@@ -42,6 +42,35 @@ def test_contacts_and_conversations_and_messages(tmp_path):
     v.messages.add(conv, direction="in", body=b"yo", status="received")
     msgs = v.messages.list(conv)
     assert [m["body"] for m in msgs] == [b"hi", b"yo"]
+    assert [m["kind"] for m in msgs] == ["text", "text"]
     v.messages.set_status(m1, "delivered")
     assert v.messages.list(conv)[0]["status"] == "delivered"
+    v.close()
+
+
+def test_messages_add_file_kind_round_trips(tmp_path):
+    v = _vault(tmp_path)
+    conv = v.conversations.add(mode="decentralized")
+    v.messages.add(
+        conv, direction="out", body=b"\x89PNG-bytes", status="sent",
+        kind="file", filename="photo.png", mime_type="image/png",
+    )
+    row = v.messages.list(conv)[0]
+    assert row["kind"] == "file"
+    assert row["filename"] == "photo.png"
+    assert row["mime_type"] == "image/png"
+    assert row["body"] == b"\x89PNG-bytes"
+    v.close()
+
+
+def test_ratchet_repo_delete(tmp_path):
+    from mys_crypto import primitives, ratchet
+
+    v = _vault(tmp_path)
+    conv = v.conversations.add(mode="decentralized")
+    _priv, pub = primitives.generate_x25519_keypair()
+    v.ratchet.save_state(conv, ratchet.ratchet_init_alice(b"k" * 32, pub))
+    assert v.ratchet.load_state(conv) is not None
+    v.ratchet.delete(conv)
+    assert v.ratchet.load_state(conv) is None
     v.close()
