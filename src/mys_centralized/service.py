@@ -71,8 +71,10 @@ class CentralizedService:
         on_state_change: OnStateChange | None = None,
         on_error: OnError | None = None,
         page_limit: int = 200,
+        room_poll_interval: float = 20.0,
     ):
         self._vault = vault
+        self._poll_interval = room_poll_interval
         # ``ws_url`` — явный override (тесты); иначе выводим из server_url входа.
         self._ws_url = ws_url
         self._ws_url_factory = ws_url_factory or _default_ws_url
@@ -93,6 +95,10 @@ class CentralizedService:
         self._session: Session | None = None
         self._ws: WsClient | None = None
         self._ws_task: asyncio.Task | None = None
+        # Периодический дотяг списка комнат (сервер не пушит события о комнатах по
+        # WS — только сообщения), чтобы новые комнаты появлялись без перезахода.
+        self._poll_task: asyncio.Task | None = None
+        self._known_rooms: set[int] = set()
 
     # --- жизненный цикл потока/loop -------------------------------------------
 
@@ -200,7 +206,19 @@ class CentralizedService:
         if sess is None:
             return None
         rest = self._rest_factory(sess.server_url, token=sess.token)
-        await self._activate(rest, sess)
+        try:
+            await self._activate(rest, sess)
+        except AuthError:
+            # Токен недействителен (истёк / сервер пересоздан) — выкидываем
+            # протухшую сессию, чтобы старт не зацикливался на ошибке, а откатился
+            # на форму входа. Откатываем частичную активацию и чистим персист.
+            await self._teardown_session()
+            try:
+                await rest.aclose()
+            except Exception:
+                pass
+            clear_session(self._vault)
+            raise
         return sess
 
     async def _activate(self, rest: RestClient, sess: Session) -> None:
@@ -211,11 +229,13 @@ class CentralizedService:
         save_session(self._vault, sess)
         self._sync = SyncEngine(
             self._vault, rest, on_message=self._dispatch_message,
-            page_limit=self._page_limit,
+            page_limit=self._page_limit, own_username=sess.username,
         )
-        await self._sync.sync_all()
+        mapping = await self._sync.sync_all()
+        self._known_rooms = set(mapping)
         self._on_state_change("synced")
         self._start_ws()
+        self._start_room_poll()
 
     def _dispatch_message(self, conv_id, local_id, _msg) -> None:
         self._on_message(conv_id, local_id)
@@ -228,6 +248,40 @@ class CentralizedService:
             return  # WS-эндпоинт не определён → работаем без live-канала
         self._ws = self._ws_factory(url, self._session.token)
         self._ws_task = self._loop.create_task(self._ws_loop(self._ws, self._sync))
+
+    def _start_room_poll(self) -> None:
+        """Периодически дотягивать список комнат (и историю), пока сессия активна.
+
+        Сервер по WS присылает только кадры ``message``, но не события о новых
+        комнатах, поэтому без опроса комната, заведённая на вебе после коннекта,
+        не появлялась бы до перезахода/реконнекта. Сигналим UI только когда набор
+        комнат реально изменился — без лишнего мерцания статуса."""
+        if self._poll_interval <= 0:
+            return
+        self._poll_task = self._loop.create_task(self._poll_loop())
+
+    async def _poll_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self._poll_interval)
+                if self._sync is None:
+                    continue
+                try:
+                    mapping = await self._sync.sync_all()
+                except asyncio.CancelledError:
+                    raise
+                except AuthError as exc:
+                    self._on_state_change("unauthorized")
+                    self._on_error(exc)
+                    return  # токен мёртв — опрос бесполезен
+                except Exception:
+                    continue  # сетевой сбой опроса — переживём до следующего тика
+                now = set(mapping)
+                if now != self._known_rooms:
+                    self._known_rooms = now
+                    self._on_state_change("synced")  # UI пересоберёт список бесед
+        except asyncio.CancelledError:
+            raise
 
     async def _ws_loop(self, ws: WsClient, sync: SyncEngine) -> None:
         try:
@@ -272,7 +326,15 @@ class CentralizedService:
             wipe_local_cache(self._vault)  # по настройке стираем локальную историю
 
     async def _teardown_session(self) -> None:
-        """Остановить live-WS и закрыть REST, не трогая персист сессии в vault."""
+        """Остановить live-WS/опрос и закрыть REST, не трогая персист сессии в vault."""
+        if self._poll_task is not None:
+            self._poll_task.cancel()
+            try:
+                await self._poll_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._poll_task = None
+        self._known_rooms = set()
         if self._ws is not None:
             self._ws.close()
         if self._ws_task is not None:

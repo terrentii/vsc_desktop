@@ -10,6 +10,8 @@ ristretto255 — проверенный примитив ровно под ciphe
 """
 
 import ctypes
+import os
+import sys
 from ctypes.util import find_library
 
 
@@ -17,14 +19,49 @@ class RistrettoError(Exception):
     """Невалидная точка/скаляр или identity-результат scalarmult."""
 
 
+def _candidate_names() -> list[str]:
+    """Имена общей библиотеки libsodium для текущей ОС."""
+    if sys.platform.startswith("win"):
+        return ["libsodium.dll", "sodium.dll"]
+    if sys.platform == "darwin":
+        return ["libsodium.dylib", "libsodium.23.dylib"]
+    return ["libsodium.so.26", "libsodium.so", "libsodium.so.23"]
+
+
+def _bundled_dirs() -> list[str]:
+    """Каталоги, куда упаковщики (PyInstaller/AppImage) кладут libsodium."""
+    dirs: list[str] = []
+    meipass = getattr(sys, "_MEIPASS", None)  # PyInstaller onefile/onedir
+    if meipass:
+        dirs.append(meipass)
+    dirs.append(os.path.dirname(os.path.abspath(__file__)))
+    return dirs
+
+
 def _load() -> ctypes.CDLL:
-    candidates = [find_library("sodium"), "libsodium.so.26", "libsodium.so"]
+    """Найти и загрузить libsodium: явный путь → bundled → системный.
+
+    Порядок: ``$MYS_LIBSODIUM`` (явное переопределение) → библиотека, упакованная
+    рядом с приложением (Windows/macOS-сборки) → системная через ``find_library``
+    → имена по умолчанию для ОС. Так P2P-режим работает и в самодостаточных
+    сборках (AppImage/.exe/.app), где системного libsodium нет.
+    """
+    attempts: list[str] = []
+    override = os.environ.get("MYS_LIBSODIUM")
+    if override:
+        attempts.append(override)
+    names = _candidate_names()
+    for directory in _bundled_dirs():
+        attempts.extend(os.path.join(directory, name) for name in names)
+    sys_name = find_library("sodium")
+    if sys_name:
+        attempts.append(sys_name)
+    attempts.extend(names)
+
     last: OSError | None = None
-    for name in candidates:
-        if not name:
-            continue
+    for candidate in attempts:
         try:
-            return ctypes.CDLL(name)
+            return ctypes.CDLL(candidate)
         except OSError as exc:  # pragma: no cover - зависит от системы
             last = exc
     raise RistrettoError(

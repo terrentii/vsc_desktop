@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=МЫС Desktop
+GenericName=Anonymous Messenger
+GenericName[ru]=Анонимный мессенджер
+Comment=Anonymous messenger: centralized + P2P, end-to-end encrypted
+Comment[ru]=Анонимный мессенджер: централизованный режим и P2P, E2E-шифрование
+Exec=mys-desktop
+Icon=mys-desktop
+Terminal=false
+Categories=Network;InstantMessaging;Qt;
+Keywords=chat;messenger;p2p;crypto;anonymous;мессенджер;
+StartupNotify=true
+StartupWMClass=mys-desktop
