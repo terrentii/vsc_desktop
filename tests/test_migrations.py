@@ -41,3 +41,18 @@ def test_migrate_adds_file_columns_to_messages():
     migrations.migrate(conn)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
     assert {"kind", "filename", "mime_type"} <= cols
+
+
+def test_migrate_adds_media_ref_column():
+    conn = _conn()
+    migrations.migrate(conn)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+    assert "media_ref" in cols
+    assert migrations.TARGET_VERSION == 6
+
+
+def test_migrate_adds_reply_columns():
+    conn = _conn()
+    migrations.migrate(conn)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+    assert {"reply_author", "reply_snippet"} <= cols

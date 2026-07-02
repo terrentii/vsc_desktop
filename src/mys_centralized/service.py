@@ -178,9 +178,50 @@ class CentralizedService:
         """Создать комнату на сервере → локальная беседа. Возвращает conv_id."""
         return self._submit(self._create_room(name), timeout=timeout)
 
-    def send_message(self, conversation_id: int, body: str, *, timeout: float = 15.0) -> int:
-        """Отправить сообщение (REST, идемпотентно). Возвращает локальный id."""
-        return self._submit(self._send(conversation_id, body), timeout=timeout)
+    def send_message(
+        self, conversation_id: int, body: str, *,
+        reply: dict | None = None, timeout: float = 15.0, wait: bool = True,
+    ) -> int | None:
+        """Отправить сообщение (REST, идемпотентно). Возвращает локальный id.
+
+        ``reply`` — {"wire", "sender", "snippet"} для ответа на сообщение.
+        ``wait=False`` — оптимистичная отправка: вызов не блокируется, локальная
+        pending-строка появится через on_message; ошибка уйдёт в on_error, строка
+        останется в статусе failed (возвращает None)."""
+        if wait:
+            return self._submit(self._send(conversation_id, body, reply), timeout=timeout)
+        if self._loop is None:
+            raise RuntimeError("сервис не запущен")
+
+        async def _bg():
+            try:
+                await self._send(conversation_id, body, reply)
+            except Exception as exc:
+                self._on_error(exc)
+
+        asyncio.run_coroutine_threadsafe(_bg(), self._loop)
+        return None
+
+    def edit_message(self, message_id: int, body: str, *, timeout: float = 15.0) -> None:
+        """Изменить своё сообщение (локальный id) на сервере и в vault."""
+        self._submit(self._edit(message_id, body), timeout=timeout)
+
+    def delete_message(self, message_id: int, *, timeout: float = 15.0) -> None:
+        """Удалить своё сообщение (локальный id) на сервере и в vault."""
+        self._submit(self._delete(message_id), timeout=timeout)
+
+    def send_file(
+        self, conversation_id: int, filename: str, mime_type: str, data: bytes,
+        *, timeout: float = 60.0,
+    ) -> int:
+        """Загрузить файл и отправить сообщение со ссылкой на него. Локальный id."""
+        return self._submit(
+            self._send_file(conversation_id, filename, mime_type, data), timeout=timeout
+        )
+
+    def fetch_media(self, message_id: int, *, timeout: float = 30.0) -> bytes:
+        """Докачать (или вернуть уже закэшированные) байты вложения сообщения."""
+        return self._submit(self._fetch_media(message_id), timeout=timeout)
 
     def logout(self, *, timeout: float = 10.0) -> None:
         """REST logout (best-effort) + очистка сессии в vault + остановка live."""
@@ -294,6 +335,14 @@ class CentralizedService:
                     self._on_state_change("connected")
                 elif etype == "message":
                     await sync.ingest_ws(event)
+                elif etype == "message_edited":
+                    conv_id = sync.apply_ws_edit(event)
+                    if conv_id is not None:
+                        self._on_message(conv_id, 0)  # 0 = «содержимое изменилось»
+                elif etype == "message_deleted":
+                    conv_id = sync.apply_ws_delete(event)
+                    if conv_id is not None:
+                        self._on_message(conv_id, 0)
         except asyncio.CancelledError:
             raise
         except AuthError as exc:
@@ -308,10 +357,30 @@ class CentralizedService:
             raise RuntimeError("нет активной сессии")
         return await self._sync.create_room(name)
 
-    async def _send(self, conversation_id, body) -> int:
+    async def _send(self, conversation_id, body, reply=None) -> int:
         if self._sync is None:
             raise RuntimeError("нет активной сессии")
-        return await self._sync.send(conversation_id, body)
+        return await self._sync.send(conversation_id, body, reply=reply)
+
+    async def _edit(self, message_id, body) -> None:
+        if self._sync is None:
+            raise RuntimeError("нет активной сессии")
+        await self._sync.edit(message_id, body)
+
+    async def _delete(self, message_id) -> None:
+        if self._sync is None:
+            raise RuntimeError("нет активной сессии")
+        await self._sync.delete(message_id)
+
+    async def _send_file(self, conversation_id, filename, mime_type, data) -> int:
+        if self._sync is None:
+            raise RuntimeError("нет активной сессии")
+        return await self._sync.send_file(conversation_id, filename, mime_type, data)
+
+    async def _fetch_media(self, message_id) -> bytes:
+        if self._sync is None:
+            raise RuntimeError("нет активной сессии")
+        return await self._sync.fetch_media(message_id)
 
     async def _logout(self) -> None:
         rest = self._rest

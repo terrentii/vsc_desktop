@@ -63,6 +63,25 @@ def test_messages_add_file_kind_round_trips(tmp_path):
     v.close()
 
 
+def test_messages_lazy_image_backfilled_via_set_body(tmp_path):
+    v = _vault(tmp_path)
+    conv = v.conversations.add(mode="centralized")
+    mid = v.messages.add(
+        conv, direction="in", body=None, status="received",
+        kind="image", filename="photo.png", mime_type="image/png",
+        media_ref="abc123_photo.png",
+    )
+    row = v.messages.get(mid)
+    assert row["kind"] == "image"
+    assert row["media_ref"] == "abc123_photo.png"
+    assert row["body"] is None
+
+    v.messages.set_body(mid, b"\x89PNG-real-bytes")
+    refreshed = v.messages.list(conv)[0]
+    assert refreshed["body"] == b"\x89PNG-real-bytes"
+    v.close()
+
+
 def test_ratchet_repo_delete(tmp_path):
     from mys_crypto import primitives, ratchet
 
@@ -73,4 +92,12 @@ def test_ratchet_repo_delete(tmp_path):
     assert v.ratchet.load_state(conv) is not None
     v.ratchet.delete(conv)
     assert v.ratchet.load_state(conv) is None
+    v.close()
+
+
+def test_conversation_rename(tmp_path):
+    v = _vault(tmp_path)
+    conv = v.conversations.add(mode="decentralized", title="старое имя")
+    v.conversations.rename(conv, "новое имя")
+    assert v.conversations.get(conv)["title"] == "новое имя"
     v.close()

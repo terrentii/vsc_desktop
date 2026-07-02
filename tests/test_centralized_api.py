@@ -164,3 +164,79 @@ async def test_logout_clears_token_even_on_error():
     with pytest.raises(NetworkError):
         await rc.logout()
     assert rc.token is None
+
+
+# ── вложения ───────────────────────────────────────────────────────────────────
+
+async def test_get_messages_parses_media_field():
+    def handler(request):
+        return httpx.Response(200, json={
+            "messages": [
+                {"id": 1, "room_id": 7, "sender": "x", "body": "", "created_at": "t",
+                 "media": "abc_photo.png"},
+                {"id": 2, "room_id": 7, "sender": "x", "body": "hi", "created_at": "t"},
+            ],
+            "next_cursor": None,
+        })
+
+    rc = make_client(handler, token="T")
+    msgs, _cursor = await rc.get_messages(7)
+    assert msgs[0].media == "abc_photo.png"
+    assert msgs[1].media is None
+
+
+async def test_post_message_includes_media_in_request_json():
+    seen = []
+
+    def handler(request):
+        import json
+        payload = json.loads(request.content)
+        seen.append(payload)
+        return httpx.Response(200, json={
+            "id": 1, "room_id": payload["room_id"], "sender": "alice",
+            "body": payload["body"], "created_at": "t",
+            "client_msg_id": payload["client_msg_id"], "media": payload.get("media"),
+        })
+
+    rc = make_client(handler, token="T")
+    msg = await rc.post_message(4, "", "c-1", media="abc_photo.png")
+    assert seen[0]["media"] == "abc_photo.png"
+    assert msg.media == "abc_photo.png"
+
+
+async def test_post_message_omits_media_when_not_given():
+    def handler(request):
+        import json
+        payload = json.loads(request.content)
+        assert "media" not in payload
+        return httpx.Response(200, json={
+            "id": 1, "room_id": payload["room_id"], "sender": "alice",
+            "body": payload["body"], "created_at": "t",
+            "client_msg_id": payload["client_msg_id"],
+        })
+
+    rc = make_client(handler, token="T")
+    await rc.post_message(4, "hi", "c-1")
+
+
+async def test_upload_media_sends_multipart_and_parses_response():
+    def handler(request):
+        assert request.url.path == "/api/rooms/4/media"
+        assert request.headers["Authorization"] == "Bearer T"
+        return httpx.Response(201, json={"ok": True, "filename": "abc_photo.png",
+                                          "mime_type": "image/png", "size": 5})
+
+    rc = make_client(handler, token="T")
+    result = await rc.upload_media(4, "photo.png", b"\x89PNG\r", "image/png")
+    assert result == {"filename": "abc_photo.png", "mime_type": "image/png", "size": 5}
+
+
+async def test_download_media_returns_bytes_and_content_type():
+    def handler(request):
+        assert request.url.path == "/api/rooms/4/media/abc_photo.png"
+        return httpx.Response(200, content=b"raw-bytes", headers={"content-type": "image/png"})
+
+    rc = make_client(handler, token="T")
+    data, mime = await rc.download_media(4, "abc_photo.png")
+    assert data == b"raw-bytes"
+    assert mime == "image/png"

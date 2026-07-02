@@ -25,6 +25,17 @@ CHUNK_SIZE = 256 * 1024          # 256 КиБ — с запасом под ~1 М
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 МБ: получатель буферизует файл в памяти целиком
 TRANSFER_ID_LEN = 16
 
+# Расширения изображений — для инлайн-превью в чате (ChatView). Зеркалит
+# mys_centralized.media.IMAGE_EXTS, но без импорта оттуда: режимы (P2P/«Центр»)
+# развязаны, несмотря на похожие константы (см. mys_centralized/media.py).
+IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif"}
+
+
+def kind_for_filename(filename: str) -> str:
+    """``"image"`` для расширений из ``IMAGE_EXTS`` (инлайн-превью), иначе ``"file"``."""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return "image" if ext in IMAGE_EXTS else "file"
+
 _META_FIXED = TRANSFER_ID_LEN + 8 + 4 + 4 + 32  # transfer_id+total_size+chunk_size+chunk_count+sha256
 
 

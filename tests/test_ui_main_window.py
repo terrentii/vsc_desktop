@@ -74,9 +74,9 @@ def test_file_message_renders_as_attachment_row(qtbot, tmp_path):
 
 
 def test_delete_conversation_clears_current_and_refreshes(qtbot, tmp_path, monkeypatch):
-    from PySide6.QtWidgets import QMessageBox
+    from mys_ui.dialogs import common
 
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    monkeypatch.setattr(common, "confirm", lambda *a, **k: True)
 
     c = _ready(tmp_path)
     conv = c.create_conversation("чат")
@@ -92,3 +92,17 @@ def test_delete_conversation_clears_current_and_refreshes(qtbot, tmp_path, monke
     assert w.conversations.list.count() == 0
     assert c.list_conversations() == []
     c.lock()
+
+
+def test_favorites_pinned_on_top(qtbot):
+    from mys_ui.widgets.conversation_list import ConversationList
+
+    lst = ConversationList()
+    qtbot.addWidget(lst)
+    lst.populate([
+        {"id": 1, "title": "Тест"},
+        {"id": 2, "title": "Избранное"},
+        {"id": 3, "title": "Volounteers"},
+    ])
+    titles = [lst.list.item(i).text() for i in range(lst.list.count())]
+    assert titles == ["Избранное", "Тест", "Volounteers"]

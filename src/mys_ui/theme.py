@@ -46,6 +46,7 @@ DARK = {
     "accent": "#4d7bff",      # cobalt (единый акцент DS, dark-mode вариант)
     "accentSoft": "#141e36",  # rgba(243,243,241,.06) over bg
     "cobalt": "#4d7bff",
+    "ink": "#06112a",         # чернильная рамка кобальтовых кнопок (обе темы)
     "warn": "#ff6b73",
     "success": "#4ade80",
     "warning": "#e3b341",
@@ -69,6 +70,7 @@ LIGHT = {
     "accent": "#0040ff",      # cobalt (единый акцент DS)
     "accentSoft": "#e6ebfb",  # rgba(0,64,255,.07) over bg
     "cobalt": "#0040ff",
+    "ink": "#06112a",         # чернильная рамка кобальтовых кнопок (обе темы)
     "warn": "#da4453",
     "success": "#1a7f4f",
     "warning": "#b8860b",
@@ -275,11 +277,11 @@ QWidget#ChatHeader {{
     background: {t['surface']};
     border-bottom: 2px solid {t['line']};
 }}
-QLabel#ChatName {{ color: {t['text']}; font-size: 20px; font-weight: 600; }}
+QLabel#ChatName {{ color: {t['text']}; font-size: 26px; font-weight: 600; }}
 QLabel#ChatSub {{
     color: {t['text3']};
     font-family: {FONT_MONO};
-    font-size: 13px;
+    font-size: 16px;
 }}
 QLabel#FounderBadge {{
     background: {t['cobalt']};
@@ -293,8 +295,8 @@ QLabel#ChatBadge {{
     color: {t['text3']};
     border: 1px solid {t['border2']};
     font-family: {FONT_MONO};
-    font-size: 13px;
-    padding: 4px 8px;
+    font-size: 16px;
+    padding: 5px 10px;
 }}
 QWidget#Disclaimer {{
     background: {t['accentSoft']};
@@ -327,7 +329,29 @@ QLineEdit {{
 }}
 /* фокус: граница остаётся ink — кобальтовую смещённую тень даёт BrutalLineEdit */
 QLineEdit:focus {{ border: 1px solid {t['line']}; }}
-QLineEdit#MsgField {{ font-size: 16px; }}
+QLineEdit#MsgField {{ font-size: 21px; }}
+QLabel#ReplyLabel {{
+    color: {t['text3']};
+    font-family: {FONT_MONO};
+    font-size: 14px;
+}}
+QToolButton#ReplyClose {{
+    background: {t['surface']};
+    color: {t['text2']};
+    border: 1px solid {t['border2']};
+    font-family: {FONT_MONO};
+    font-size: 14px;
+    padding: 2px 8px;
+}}
+QToolButton#ReplyClose:hover {{ color: {t['warn']}; border-color: {t['warn']}; }}
+QPlainTextEdit#DialogTextArea {{
+    background: {t['field']};
+    color: {t['text']};
+    border: 1px solid {t['line']};
+    padding: 10px 12px;
+    font-size: 18px;
+    selection-background-color: {t['accent']};
+}}
 
 /* ---- статус-бар ---- */
 QWidget#StatusBar {{

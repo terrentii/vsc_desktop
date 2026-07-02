@@ -51,9 +51,13 @@ class TopBar(QWidget):
         layout.addWidget(self.btn_lock)
 
     def _select(self, mode: str) -> None:
+        self.set_mode(mode)
+        self.mode_changed.emit(mode)
+
+    def set_mode(self, mode: str) -> None:
+        """Отразить режим без сигнала (восстановление сохранённого при старте)."""
         self.btn_p2p.setChecked(mode == DECENTRALIZED)
         self.btn_central.setChecked(mode == CENTRALIZED)
-        self.mode_changed.emit(mode)
 
     def update_status(self, mode: str, *, account: str | None) -> None:
         """Отразить режим/сессию: P2P-чип «анонимно», аккаунт-чип или «Войти»."""

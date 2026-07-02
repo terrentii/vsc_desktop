@@ -66,6 +66,18 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
         "ALTER TABLE messages ADD COLUMN filename TEXT",
         "ALTER TABLE messages ADD COLUMN mime_type TEXT",
     ]),
+    # v5 — изображения/файлы в «Центре»: ссылка на серверное имя вложения
+    # (kind='image' наравне с 'text'/'file' из v4 — доп. колонка не нужна).
+    (5, [
+        "ALTER TABLE messages ADD COLUMN media_ref TEXT",
+    ]),
+    # v6 — ответы в «Центре»: денормализованная цитата (автор + первые 60 симв.)
+    # — сервер отдаёт её готовой, локально ссылку не резолвим (веб хранит
+    # reply_to хрупким индексом, паритет по отображению, не по хранению).
+    (6, [
+        "ALTER TABLE messages ADD COLUMN reply_author TEXT",
+        "ALTER TABLE messages ADD COLUMN reply_snippet TEXT",
+    ]),
 ]
 
 TARGET_VERSION = MIGRATIONS[-1][0]

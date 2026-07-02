@@ -104,6 +104,13 @@ class ConversationsRepo(_Base):
         cur.row_factory = _row_factory
         return cur.fetchall()
 
+    def rename(self, conversation_id: int, title: str) -> None:
+        """Локальное переименование беседы (заголовок живёт только в vault)."""
+        self._c.execute(
+            "UPDATE conversations SET title=? WHERE id=?", (title, conversation_id)
+        )
+        self._c.commit()
+
     def delete(self, conversation_id: int) -> None:
         """Удалить беседу (сообщения чистить отдельно — FK без каскада)."""
         self._c.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
@@ -113,16 +120,20 @@ class ConversationsRepo(_Base):
 class MessagesRepo(_Base):
     def add(self, conversation_id, *, direction, body, status, wire_seq=None,
             client_msg_id=None, sender=None, kind="text", filename=None,
-            mime_type=None) -> int:
-        now = time.time()
+            mime_type=None, media_ref=None, timestamp=None,
+            reply_author=None, reply_snippet=None) -> int:
+        # timestamp — авторитетное время события (например, серверный created_at
+        # «Центра»); без него берём локальные часы.
+        now = timestamp if timestamp is not None else time.time()
         cur = self._c.execute(
             "INSERT INTO messages(conversation_id, direction, body, status, wire_seq,"
-            " client_msg_id, sender, sent_at, received_at, kind, filename, mime_type)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            " client_msg_id, sender, sent_at, received_at, kind, filename, mime_type,"
+            " media_ref, reply_author, reply_snippet)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (conversation_id, direction, body, status, wire_seq, client_msg_id, sender,
              now if direction == "out" else None,
              now if direction == "in" else None,
-             kind, filename, mime_type),
+             kind, filename, mime_type, media_ref, reply_author, reply_snippet),
         )
         self._c.commit()
         return cur.lastrowid
@@ -134,8 +145,32 @@ class MessagesRepo(_Base):
         cur.row_factory = _row_factory
         return cur.fetchall()
 
+    def get(self, message_id: int):
+        cur = self._c.execute("SELECT * FROM messages WHERE id=?", (message_id,))
+        cur.row_factory = _row_factory
+        return cur.fetchone()
+
     def set_status(self, message_id: int, status: str) -> None:
         self._c.execute("UPDATE messages SET status=? WHERE id=?", (status, message_id))
+        self._c.commit()
+
+    def set_body(self, message_id: int, body: bytes) -> None:
+        """Бэкафилл тела после ленивой докачки вложения (см. mys_centralized.sync)."""
+        self._c.execute("UPDATE messages SET body=? WHERE id=?", (body, message_id))
+        self._c.commit()
+
+    def find_by_wire(self, conversation_id, wire_seq):
+        """Сообщение беседы по серверному id (live-правки/удаления «Центра»)."""
+        cur = self._c.execute(
+            "SELECT * FROM messages WHERE conversation_id=? AND wire_seq=? LIMIT 1",
+            (conversation_id, wire_seq),
+        )
+        cur.row_factory = _row_factory
+        return cur.fetchone()
+
+    def delete(self, message_id: int) -> None:
+        """Удалить одно сообщение (правка с сервера или своё удаление)."""
+        self._c.execute("DELETE FROM messages WHERE id=?", (message_id,))
         self._c.commit()
 
     def exists_wire(self, conversation_id, wire_seq) -> bool:

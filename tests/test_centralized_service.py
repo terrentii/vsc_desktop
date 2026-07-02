@@ -33,6 +33,8 @@ class FakeServer:
         self._by_client = {}  # client_msg_id -> dict (идемпотентность)
         self.live: asyncio.Queue = asyncio.Queue()
         self.logged_out = False
+        self.media_store: dict[str, bytes] = {}
+        self._next_media_id = 0
 
     # -- REST (sync-обработчик для httpx.MockTransport) --------------------
 
@@ -79,16 +81,53 @@ class FakeServer:
             msg = {
                 "id": self._next_id, "room_id": body["room_id"], "sender": self.username,
                 "body": body["body"], "created_at": "t", "client_msg_id": cid,
+                "media": body.get("media"),
             }
             self.history.setdefault(body["room_id"], []).append(msg)
             self._by_client[cid] = msg
             return httpx.Response(200, json=msg)
+        if path.startswith("/api/rooms/") and path.endswith("/media") and method == "POST":
+            filename, data, mime_type = self._parse_multipart_file(request)
+            self._next_media_id += 1
+            server_name = f"m{self._next_media_id}_{filename}"
+            self.media_store[server_name] = data
+            return httpx.Response(201, json={
+                "ok": True, "filename": server_name, "mime_type": mime_type, "size": len(data),
+            })
+        if path.startswith("/api/rooms/") and "/media/" in path and method == "GET":
+            server_name = path.rsplit("/", 1)[-1]
+            data = self.media_store.get(server_name)
+            if data is None:
+                return httpx.Response(404)
+            return httpx.Response(200, content=data, headers={"content-type": "application/octet-stream"})
         return httpx.Response(404, json={"error": "not_found"})
 
-    def add_history(self, room_id, body):
+    @staticmethod
+    def _parse_multipart_file(request: httpx.Request) -> tuple[str, bytes, str]:
+        """Мини-парсер multipart/form-data для одного поля "file" (тестовый сервер)."""
+        content_type = request.headers.get("content-type", "")
+        boundary = content_type.split("boundary=")[1].encode()
+        parts = request.content.split(b"--" + boundary)
+        for part in parts:
+            if b'name="file"' not in part:
+                continue
+            header_end = part.index(b"\r\n\r\n") + 4
+            headers_raw = part[:header_end].decode("utf-8", "replace")
+            body = part[header_end:]
+            if body.endswith(b"\r\n"):
+                body = body[:-2]
+            filename = headers_raw.split('filename="')[1].split('"')[0]
+            mime_type = "application/octet-stream"
+            for line in headers_raw.splitlines():
+                if line.lower().startswith("content-type:"):
+                    mime_type = line.split(":", 1)[1].strip()
+            return filename, body, mime_type
+        raise AssertionError("multipart 'file' part not found")
+
+    def add_history(self, room_id, body, *, media=None):
         self._next_id += 1
         m = {"id": self._next_id, "room_id": room_id, "sender": "bob",
-             "body": body, "created_at": "t"}
+             "body": body, "created_at": "t", "media": media}
         self.history.setdefault(room_id, []).append(m)
         return m
 
@@ -321,6 +360,34 @@ async def test_resume_without_session_returns_none(vault):
     svc.start()
     try:
         assert await asyncio.to_thread(svc.resume) is None
+    finally:
+        await asyncio.to_thread(svc.stop)
+        s.close()
+        await s.wait_closed()
+
+
+async def test_service_send_file_and_fetch_media_roundtrip(vault):
+    server = FakeServer()
+    s, ws_url = await _serve(server)
+    svc = _make_service(vault, server, ws_url)
+    svc.start()
+    try:
+        await asyncio.to_thread(svc.login, "http://srv", "alice", "pw")
+        conv = vault.conversations.list("centralized")[0]["id"]
+        local_id = await asyncio.to_thread(
+            svc.send_file, conv, "photo.png", "image/png", b"\x89PNG-bytes"
+        )
+        row = vault.messages.get(local_id)
+        assert row["kind"] == "image"
+        assert row["body"] == b"\x89PNG-bytes"  # своё вложение — тело сразу
+
+        # Как будто это сообщение пришло от другого клиента без тела (ленивая
+        # докачка): сбрасываем body вручную и проверяем fetch_media.
+        vault.messages.set_body(local_id, None)
+        assert vault.messages.get(local_id)["body"] is None
+        data = await asyncio.to_thread(svc.fetch_media, local_id)
+        assert data == b"\x89PNG-bytes"
+        assert vault.messages.get(local_id)["body"] == b"\x89PNG-bytes"
     finally:
         await asyncio.to_thread(svc.stop)
         s.close()

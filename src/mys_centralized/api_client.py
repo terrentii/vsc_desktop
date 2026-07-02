@@ -41,10 +41,11 @@ class RestClient:
             return {"Authorization": f"Bearer {self._token}"}
         return {}
 
-    async def _request(self, method, path, *, json=None, params=None, auth=True):
+    async def _request(self, method, path, *, json=None, params=None, files=None, auth=True):
         try:
             resp = await self._client.request(
-                method, path, json=json, params=params, headers=self._headers(auth=auth)
+                method, path, json=json, params=params, files=files,
+                headers=self._headers(auth=auth),
             )
         except httpx.HTTPError as exc:  # таймаут, обрыв, DNS и т.п.
             raise NetworkError(str(exc)) from exc
@@ -156,12 +157,15 @@ class RestClient:
         return msgs, (int(next_cursor) if next_cursor is not None else None)
 
     async def post_message(
-        self, room_id: int, body: str, client_msg_id: str
+        self, room_id: int, body: str, client_msg_id: str, *,
+        media: str | None = None, reply_to: int | None = None,
     ) -> RemoteMessage:
-        resp = await self._request(
-            "POST", "/api/messages",
-            json={"room_id": room_id, "body": body, "client_msg_id": client_msg_id},
-        )
+        payload = {"room_id": room_id, "body": body, "client_msg_id": client_msg_id}
+        if media is not None:
+            payload["media"] = media
+        if reply_to is not None:
+            payload["reply_to"] = reply_to
+        resp = await self._request("POST", "/api/messages", json=payload)
         data = self._json(resp)
         try:
             msg = self._message_from(data, room_id)
@@ -170,6 +174,37 @@ class RestClient:
         if msg.client_msg_id is None:
             msg.client_msg_id = client_msg_id
         return msg
+
+    async def edit_message(self, message_id: int, body: str) -> None:
+        """Изменить своё сообщение (по серверному id)."""
+        await self._request(
+            "POST", f"/api/messages/{message_id}/edit", json={"body": body}
+        )
+
+    async def delete_message(self, message_id: int) -> None:
+        """Удалить своё сообщение (по серверному id)."""
+        await self._request("POST", f"/api/messages/{message_id}/delete")
+
+    async def upload_media(
+        self, room_id: int, filename: str, data: bytes, mime_type: str
+    ) -> dict:
+        resp = await self._request(
+            "POST", f"/api/rooms/{room_id}/media",
+            files={"file": (filename, data, mime_type)},
+        )
+        payload = self._json(resp)
+        try:
+            return {
+                "filename": payload["filename"],
+                "mime_type": payload.get("mime_type"),
+                "size": payload.get("size"),
+            }
+        except (KeyError, TypeError) as exc:
+            raise ProtocolError("malformed upload response") from exc
+
+    async def download_media(self, room_id: int, filename: str) -> tuple[bytes, str]:
+        resp = await self._request("GET", f"/api/rooms/{room_id}/media/{filename}")
+        return resp.content, resp.headers.get("content-type", "application/octet-stream")
 
     @staticmethod
     def _message_from(item: dict, room_id: int) -> RemoteMessage:
@@ -180,4 +215,6 @@ class RestClient:
             body=item["body"],
             created_at=item["created_at"],
             client_msg_id=item.get("client_msg_id"),
+            media=item.get("media"),
+            reply=item.get("reply_to") or None,
         )

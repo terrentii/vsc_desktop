@@ -146,7 +146,8 @@ class Session:
                 self._vault.ratchet.save_state(self._conv, self._state)
             local_id = self._vault.messages.add(
                 self._conv, direction="out", body=data, status="sent",
-                kind="file", filename=filename, mime_type=mime_type,
+                kind=filetransfer.kind_for_filename(filename),
+                filename=filename, mime_type=mime_type,
             )
         return local_id
 

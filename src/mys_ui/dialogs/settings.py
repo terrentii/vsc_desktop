@@ -101,6 +101,8 @@ class SettingsDialog(FramelessDialog):
         app = QApplication.instance()
         if app is not None:
             theme.set_theme(app, mode)
+            from mys_ui import prefs
+            prefs.save_theme(mode)  # тема переживает перезапуск
 
     def _change(self) -> None:
         try:

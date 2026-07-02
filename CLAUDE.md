@@ -240,6 +240,72 @@
   «Центра» при выходе» + кнопка «Выйти из аккаунта» в настройках. Примитивы удаления
   добавлены в `mys_storage` (`SettingsRepo.delete/delete_prefix`, `ConversationsRepo.delete`,
   `MessagesRepo.delete_for_conversation`).
+- ✅ **Изображения/файлы/код в «Центре» (паритет с вебом).** Bearer/WS-протокол не
+  передавал вложения вообще — добавлены `POST/GET /api/rooms/<id>/media[/<file>]`
+  (Bearer, `vsc_web/centralized.py`, зеркалит валидацию/раздачу из `rooms.py`) и
+  поле `media` в `POST /api/messages`/`GET /api/rooms/<id>/messages`/WS-fanout.
+  Клиент: `mys_centralized/media.py` (лимит 50 МБ, allowlist расширений, `kind`
+  по расширению) → `api_client.upload_media/download_media` → `sync.py`
+  (`send_file`/`fetch_media`, ленивая докачка: входящие media-сообщения
+  персистятся с `body=NULL`/`media_ref`, байты подтягиваются по требованию —
+  автоматически для картинок при открытии беседы, по клику для файлов; свои
+  исходящие — тело сразу, байты уже в памяти при отправке) → `service.py`/
+  `controller.py` (`send_file` central-ветка, `fetch_media`). Хранилище:
+  миграция v5 (`messages.media_ref`), `MessagesRepo.get/set_body`. UI:
+  `chat_view.py` — ```код```-фенсы рисуются моно-блоком с фоном (без
+  библиотеки подсветки, авто-детект на момент отрисовки, паритет с
+  `vsc_web/app.py`'s `render_text`), «Копировать код» через правый клик,
+  изображения — инлайн `QPixmap`-превью, файлы без тела — плейсхолдер
+  «нажмите, чтобы загрузить». `reply_to` и подсветка синтаксиса — вне рамок.
+- ✅ **Паритет отображения ленты с вебом.** `chat_view.py`: без аватаров (в вебе
+  их нет), имя автора жирным (своё — кобальтом; в «Центре» подписывается
+  юзернеймом сессии, не «я»), время в веб-формате `format_ts`
+  («сегодня/вчера HH:MM», иначе «13 май 15:27»), код-блок с шапкой
+  «//// CODE» + кликабельной «КОПИРОВАТЬ» (`editorEvent` делегата; контекстное
+  меню осталось), картинки в тонкой рамке. Серверный `created_at` теперь
+  персистится как время сообщения (`sync._epoch_of` → `MessagesRepo.add
+  timestamp=`; наивный ISO трактуется как UTC) — раньше вся синхронизированная
+  история получала время синка. Строки, записанные до этого фикса, в vault не
+  перезаписываются (дедуп по `wire_seq`) — лечится ресинком с чистым кэшем
+  (`central.wipe_on_logout` + перелогин).
+- ✅ **Ответы/правка/удаление сообщений в «Центре»** (десктоп + Bearer-API в
+  `vsc_web/centralized.py`). Сервер: `reply_to` в `POST /api/messages`
+  (принимает серверный `Message.id`, хранит веб-семантикой — 1-based индексом;
+  наружу отдаёт готовую цитату `{id, sender, body≤60}`),
+  `POST /api/messages/<id>/edit|/delete` (только автор), WS-кадры
+  `message_edited`/`message_deleted`; веб-пути `rooms.py` (post/edit/delete)
+  теперь тоже фанаутят в десктопный `/ws` (раньше веб-сообщения доезжали только
+  20-сек. опросом). Клиент: миграция v6 (`reply_author`/`reply_snippet` —
+  денормализованная цитата), `SyncEngine.send(reply=)/edit/delete/
+  apply_ws_edit/apply_ws_delete`, `MessagesRepo.find_by_wire/delete`.
+  UI: кликабельные действия в строке (`_action_rects` делегата: ОТВЕТИТЬ всем,
+  ИЗМЕНИТЬ/УДАЛИТЬ своим; только «Центр» с сессией и подтверждённый `wire_seq`;
+  вложения не редактируются), плашка «↩ Ответ…» в `message_input.py`, цитата
+  под именем. Действия и «КОПИРОВАТЬ» — фактурные кнопки (`_paint_button`: фон +
+  рамка, ОТВЕТИТЬ — кобальт); масштаб ленты +30% (имя/тело 21px, моно 19px,
+  служебный моно 14px, отступы/шапка кода/превью соразмерно; `MsgField` 21px,
+  `ChatName` 26px в theme.py). Свои сообщения из веба (входящие с логином
+  сессии) рисуются и управляются как свои (`own_sender` в `show_messages`,
+  `_is_own_row`). Отправка оптимистичная: `controller.send_message` зовёт
+  сервис с `wait=False`, `SyncEngine.send` нотифицирует UI на каждом переходе
+  pending→sent/failed, недоставленные помечаются красным «● НЕ ДОСТАВЛЕНО»
+  (`_STATUS_ROLE`); дедуп эха прежний (client_msg_id / тело). Системные
+  QMessageBox/QInputDialog заменены тематическими (`mys_ui/dialogs/common.py`:
+  `confirm/warn/ask_text/ask_multiline` на FramelessDialog+BrutalButton).
+  Цитата ответа для вложений — «Изображение»/имя файла (клиент `_row_snippet`,
+  сервер `_reply_payload`). Кнопки ленты объёмные (`_paint_button`: смещённая
+  тень + «утапливание» по MouseButtonPress в `editorEvent`), действия видны
+  только у наведённой строки (`ChatView._hover_row`, mouseTracking; КОПИРОВАТЬ
+  видна всегда — паритет с вебом). Тема и режим переживают перезапуск —
+  `mys_ui/prefs.py` (QSettings IniFormat/UserScope, несекретно, нужно до
+  разблокировки vault); тесты изолируют QSettings фикстурой в conftest.
+  Подсветка выбранной комнаты переживает repopulate (`_selected_id` в
+  `conversation_list.py`); P2P-каналы переименовываются локально (контекстное
+  меню → `ConversationsRepo.rename`, только режим P2P). Сетевые операции — фоновыми потоками (`_run_message_op`,
+  `_login_worker`: вход больше не блокирует UI-поток). **Требуется деплой
+  vsc_web на soufos.ru** — на бою нет даже media-эндпоинтов (проверено:
+  `/api/rooms/1/media/x.png` → 404 вместо 401), поэтому картинки в десктопе
+  не грузятся до обновления сервера.
 
 ## Файлы и удаление диалогов в P2P
 

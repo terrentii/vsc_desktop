@@ -131,11 +131,12 @@ class BrutalButton(QPushButton):
     def _colors(self, t):
         """Возвращает (лицо, текст, граница, цвет тени)."""
         # активная вкладка (checkable) — как primary
+        # (рамка ink: кобальт не сливается с тёмным фоном/белой тенью)
         if self.isCheckable() and self.isChecked():
-            return t["accent"], "#ffffff", t["line"], t["line"]
+            return t["accent"], "#ffffff", t["ink"], t["line"]
         v = self._variant
         if v == "primary":
-            return t["accent"], "#ffffff", t["line"], t["line"]
+            return t["accent"], "#ffffff", t["ink"], t["line"]
         if v == "ink":
             return t["line"], t["bg"], t["line"], t.get(self._shadow_tok, t["line"])
         if v == "danger":

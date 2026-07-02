@@ -27,6 +27,7 @@ class FakeCentral:
         self.started = False
         self.logged_out = False
         self._next_room = 2  # login занимает room_id=b"1"
+        self.fetch_bytes = b"fetched-image-bytes"
 
     def start(self):
         self.started = True
@@ -86,7 +87,7 @@ class FakeCentral:
             mode="centralized", room_id=rid, title=name
         )
 
-    def send_message(self, conversation_id, body):
+    def send_message(self, conversation_id, body, *, reply=None, wait=True):
         lid = self.vault.messages.add(
             conversation_id, direction="out", body=body.encode("utf-8"), status="sent"
         )
@@ -99,6 +100,27 @@ class FakeCentral:
             status="received", wire_seq=99,
         )
         self._on_message(conversation_id, lid)
+
+    def send_file(self, conversation_id, filename, mime_type, data):
+        return self.vault.messages.add(
+            conversation_id, direction="out", body=data, status="sent",
+            kind="image" if filename.endswith(".png") else "file",
+            filename=filename, mime_type=mime_type, media_ref=f"srv_{filename}",
+        )
+
+    def fetch_media(self, message_id):
+        self.vault.messages.set_body(message_id, self.fetch_bytes)
+        return self.fetch_bytes
+
+    # тестовый помощник: «прилетело» сообщение с картинкой без тела (ленивая докачка)
+    def deliver_image(self, conversation_id, filename):
+        lid = self.vault.messages.add(
+            conversation_id, direction="in", body=None, status="received", wire_seq=99,
+            kind="image", filename=filename, mime_type="image/png",
+            media_ref=f"srv_{filename}",
+        )
+        self._on_message(conversation_id, lid)
+        return lid
 
 
 def _ready(tmp_path):
@@ -198,11 +220,12 @@ def test_lock_stops_central_service(qtbot, tmp_path):
 class _SyncThread:
     """Подмена threading.Thread: выполняет тело синхронно при start()."""
 
-    def __init__(self, *, target, **_kw):
+    def __init__(self, *, target, args=(), **_kw):
         self._target = target
+        self._args = args
 
     def start(self):
-        self._target()
+        self._target(*self._args)
 
 
 def test_auto_resume_restores_saved_session(qtbot, tmp_path, monkeypatch):
@@ -264,6 +287,62 @@ def test_central_new_conversation_creates_server_room(qtbot, tmp_path):
     created = [conv for conv in c.list_conversations() if conv["title"] == "проект"][0]
     assert created["room_id"] is not None
     c.lock()
+
+
+def test_send_file_allowed_in_centralized_mode_with_active_session(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setattr(main_window.threading, "Thread", _SyncThread)
+    c, holder = _ready(tmp_path)
+    w = MainWindow(c)
+    qtbot.addWidget(w)
+    c.set_mode(CENTRALIZED)
+    w._perform_central_login("https://soufos.ru", "alice", "pw", False)
+    conv = c.list_conversations()[0]["id"]
+    w._on_select(conv)
+
+    tmp_file = tmp_path / "photo.png"
+    tmp_file.write_bytes(b"\x89PNG-bytes")
+    w._on_send_file(str(tmp_file))
+
+    msgs = c.list_messages(conv)
+    out = [m for m in msgs if m["direction"] == "out"]
+    assert len(out) == 1 and out[0]["filename"] == "photo.png"
+
+
+def test_send_file_blocked_in_centralized_mode_without_session(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setattr(main_window.threading, "Thread", _SyncThread)
+    c, _ = _ready(tmp_path)
+    w = MainWindow(c)
+    qtbot.addWidget(w)
+    c.set_mode(CENTRALIZED)  # без входа — нет активной сессии
+
+    warnings = []
+    monkeypatch.setattr(
+        main_window.common, "warn",
+        lambda *a, **k: warnings.append(True),
+    )
+    w._current = 999  # непустой current, чтобы дойти до проверки сессии
+    tmp_file = tmp_path / "photo.png"
+    tmp_file.write_bytes(b"data")
+    w._on_send_file(str(tmp_file))
+    assert warnings == [True]
+
+
+def test_media_ready_rerenders_current_conversation(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setattr(main_window.threading, "Thread", _SyncThread)
+    c, holder = _ready(tmp_path)
+    w = MainWindow(c)
+    qtbot.addWidget(w)
+    c.set_mode(CENTRALIZED)
+    w._perform_central_login("https://soufos.ru", "alice", "pw", False)
+    conv = c.list_conversations()[0]["id"]
+    w._on_select(conv)
+
+    # «Пришла» картинка без тела — авто-докачка при открытии беседы должна была
+    # сработать синхронно (Thread подменён), значит тело уже в vault.
+    lid = holder["svc"].deliver_image(conv, "photo.png")
+    assert c.list_messages(conv)[-1]["id"] == lid
+    row = [m for m in c.list_messages(conv) if m["id"] == lid][0]
+    assert row["body"] == holder["svc"].fetch_bytes
 
 
 def test_settings_wipe_toggle_persists(qtbot, tmp_path):

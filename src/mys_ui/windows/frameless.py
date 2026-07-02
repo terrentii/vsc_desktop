@@ -102,6 +102,8 @@ class _ChromeTitleBar(QWidget):
         if app is None:
             return
         new = theme.toggle_theme(app)
+        from mys_ui import prefs
+        prefs.save_theme(new)  # тема переживает перезапуск
         self._theme_btn.setText("СВЕТ" if new == "dark" else "ТЁМН")
         # Кастомно-рисованные представления (пузыри чата) читают токены в paint —
         # принудительно перерисовать после смены палитры.

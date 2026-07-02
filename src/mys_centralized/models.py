@@ -30,6 +30,10 @@ class RemoteMessage:
     """Сообщение, как его отдаёт сервер.
 
     `client_msg_id` присутствует у исходящих (для идемпотентности и дедупа эха).
+    `media` — серверное имя файла вложения (``<uuid32hex>_<original>``), либо
+    `None`, если сообщение без вложения.
+    `reply` — готовая цитата ответа от сервера ``{id, sender, body(≤60)}``, либо
+    `None` (сервер резолвит хрупкий индексный `reply_to` веба на своей стороне).
     """
 
     id: int
@@ -38,6 +42,8 @@ class RemoteMessage:
     body: str
     created_at: str
     client_msg_id: str | None = None
+    media: str | None = None
+    reply: dict | None = None
 
 
 @dataclass

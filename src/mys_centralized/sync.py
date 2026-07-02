@@ -9,11 +9,27 @@ live-кадры WS лишь персистятся и дедупятся по с
 
 from __future__ import annotations
 
+import mimetypes
 import uuid
+from datetime import datetime, timezone
 
+from . import media
 from .models import RemoteMessage
 
 MODE = "centralized"
+
+
+def _epoch_of(created_at) -> float | None:
+    """Серверный ISO `created_at` (наивный = UTC, см. серверную спеку) → epoch.
+
+    Непарсибельное значение — None (хранилище подставит локальные часы)."""
+    try:
+        dt = datetime.fromisoformat(str(created_at))
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
 
 
 def _room_key(server_room_id: int) -> bytes:
@@ -102,24 +118,126 @@ class SyncEngine:
             body=frame["body"],
             created_at=frame["created_at"],
             client_msg_id=frame.get("client_msg_id"),
+            media=frame.get("media"),
+            reply=frame.get("reply_to") or None,
         )
         return self._ingest(conv_id, msg)
 
-    async def send(self, conv_id, body: str):
-        """Отправить сообщение: pending → POST (идемпотентно) → sent / failed."""
+    def apply_ws_edit(self, frame: dict):
+        """Live-правка с сервера: обновить тело по серверному id. → conv_id | None."""
+        conv_id = self._conv_for_room(int(frame["room_id"]), create=False)
+        if conv_id is None:
+            return None
+        row = self._vault.messages.find_by_wire(conv_id, int(frame["id"]))
+        if row is None:
+            return None
+        self._vault.messages.set_body(row["id"], str(frame.get("body") or "").encode("utf-8"))
+        return conv_id
+
+    def apply_ws_delete(self, frame: dict):
+        """Live-удаление с сервера: убрать строку по серверному id. → conv_id | None."""
+        conv_id = self._conv_for_room(int(frame["room_id"]), create=False)
+        if conv_id is None:
+            return None
+        row = self._vault.messages.find_by_wire(conv_id, int(frame["id"]))
+        if row is None:
+            return None
+        self._vault.messages.delete(row["id"])
+        return conv_id
+
+    def _notify(self, conv_id, local_id) -> None:
+        """Сигнал UI «строка появилась/изменила статус» (оптимистичная отправка)."""
+        if self._on_message is not None:
+            self._on_message(conv_id, local_id, None)
+
+    async def send(self, conv_id, body: str, *, reply: dict | None = None):
+        """Отправить сообщение: pending → POST (идемпотентно) → sent / failed.
+
+        ``reply`` — {"wire": <server id>, "sender": ..., "snippet": ...}: серверу
+        уходит id, локально сразу сохраняется готовая цитата. UI уведомляется на
+        каждом переходе статуса — pending-строка видна мгновенно, до ответа
+        сервера (оптимистичная отправка)."""
         server_room_id = self._server_room_of(conv_id)
         client_msg_id = uuid.uuid4().hex
+        reply = reply or {}
         local_id = self._vault.messages.add(
             conv_id, direction="out", body=body.encode("utf-8"),
             status="pending", client_msg_id=client_msg_id,
+            reply_author=reply.get("sender"), reply_snippet=reply.get("snippet"),
+        )
+        self._notify(conv_id, local_id)
+        try:
+            msg = await self._rest.post_message(
+                server_room_id, body, client_msg_id, reply_to=reply.get("wire")
+            )
+        except Exception:
+            self._vault.messages.set_status(local_id, "failed")
+            self._notify(conv_id, local_id)
+            raise
+        self._vault.messages.mark_sent(local_id, wire_seq=msg.id)
+        self._notify(conv_id, local_id)
+        return local_id
+
+    async def edit(self, message_id: int, body: str) -> None:
+        """Изменить своё сообщение: REST → локальное тело."""
+        row = self._vault.messages.get(message_id)
+        if row is None:
+            raise ValueError("сообщение не найдено")
+        if row["wire_seq"] is None:
+            raise ValueError("сообщение ещё не подтверждено сервером")
+        await self._rest.edit_message(row["wire_seq"], body)
+        self._vault.messages.set_body(message_id, body.encode("utf-8"))
+
+    async def delete(self, message_id: int) -> None:
+        """Удалить своё сообщение: REST → локальная строка."""
+        row = self._vault.messages.get(message_id)
+        if row is None:
+            return
+        if row["wire_seq"] is None:
+            raise ValueError("сообщение ещё не подтверждено сервером")
+        await self._rest.delete_message(row["wire_seq"])
+        self._vault.messages.delete(message_id)
+
+    async def send_file(self, conv_id, filename: str, mime_type: str, data: bytes) -> int:
+        """Загрузить файл, затем отправить сообщение со ссылкой на него.
+
+        Тело у нас уже в памяти — сохраняем сразу (не ленивая докачка, та
+        нужна только для чужих/исторических вложений, см. ``fetch_media``).
+        """
+        if len(data) > media.MAX_MEDIA_SIZE:
+            raise ValueError(f"файл больше {media.MAX_MEDIA_SIZE // (1024 * 1024)} МБ")
+        media.validate_extension(filename)
+        server_room_id = self._server_room_of(conv_id)
+        upload = await self._rest.upload_media(server_room_id, filename, data, mime_type)
+        client_msg_id = uuid.uuid4().hex
+        local_id = self._vault.messages.add(
+            conv_id, direction="out", body=data, status="pending",
+            client_msg_id=client_msg_id, kind=media.kind_for_filename(filename),
+            filename=filename, mime_type=mime_type, media_ref=upload["filename"],
         )
         try:
-            msg = await self._rest.post_message(server_room_id, body, client_msg_id)
+            msg = await self._rest.post_message(
+                server_room_id, "", client_msg_id, media=upload["filename"]
+            )
         except Exception:
             self._vault.messages.set_status(local_id, "failed")
             raise
         self._vault.messages.mark_sent(local_id, wire_seq=msg.id)
         return local_id
+
+    async def fetch_media(self, message_id: int) -> bytes:
+        """Докачать байты вложения (ленивая загрузка) и закэшировать в vault."""
+        row = self._vault.messages.get(message_id)
+        if row is None:
+            raise ValueError("сообщение не найдено")
+        if row["body"] is not None:
+            return row["body"]
+        if row["media_ref"] is None:
+            raise ValueError("нет вложения")
+        server_room_id = self._server_room_of(row["conversation_id"])
+        data, _mime = await self._rest.download_media(server_room_id, row["media_ref"])
+        self._vault.messages.set_body(message_id, data)
+        return data
 
     # -- дедуп и персист ---------------------------------------------------
 
@@ -142,10 +260,24 @@ class SyncEngine:
             if pending is not None:
                 self._vault.messages.mark_sent(pending["id"], wire_seq=msg.id)
                 return None
-        local_id = self._vault.messages.add(
-            conv_id, direction="in", body=msg.body.encode("utf-8"),
-            status="received", wire_seq=msg.id, sender=msg.sender,
-        )
+        when = _epoch_of(msg.created_at)
+        reply = msg.reply or {}
+        if msg.media:
+            filename = media.display_name(msg.media)
+            local_id = self._vault.messages.add(
+                conv_id, direction="in", body=None, status="received", wire_seq=msg.id,
+                sender=msg.sender, kind=media.kind_for_filename(msg.media),
+                filename=filename, mime_type=mimetypes.guess_type(filename)[0],
+                media_ref=msg.media, timestamp=when,
+                reply_author=reply.get("sender"), reply_snippet=reply.get("body"),
+            )
+        else:
+            local_id = self._vault.messages.add(
+                conv_id, direction="in", body=msg.body.encode("utf-8"),
+                status="received", wire_seq=msg.id, sender=msg.sender,
+                timestamp=when,
+                reply_author=reply.get("sender"), reply_snippet=reply.get("body"),
+            )
         if self._on_message is not None:
             self._on_message(conv_id, local_id, msg)
         return local_id

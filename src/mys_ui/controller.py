@@ -98,14 +98,17 @@ class AppController:
     def list_messages(self, conversation_id: int) -> list[dict]:
         return self.vault.messages.list(conversation_id)
 
-    def send_message(self, conversation_id: int, text: str) -> int | None:
+    def send_message(self, conversation_id: int, text: str, *, reply: dict | None = None) -> int | None:
         # Централизованный режим с активной сессией — через сервис (он персистит).
+        # ``reply`` — {"wire","sender","snippet"}, поддержан только «Центром».
         if (
             self.mode == CENTRALIZED
             and self._central is not None
             and self._central.session is not None
         ):
-            self._central.send_message(conversation_id, text)
+            # Оптимистичная отправка: не блокируем UI-поток на время POST —
+            # pending-строка прилетит через on_message и покажется сразу.
+            self._central.send_message(conversation_id, text, reply=reply, wait=False)
             return None
         # Активная P2P-сессия — отправляем через сервис (он же персистит исходящее).
         if self._service is not None and self._service.has_session(conversation_id):
@@ -117,10 +120,18 @@ class AppController:
         )
 
     def send_file(self, conversation_id: int, filename: str, mime_type: str, data: bytes) -> int | None:
-        """Аналог send_message для файлов — только P2P (см. запрос пользователя).
+        """Аналог send_message для файлов — P2P и «Центр».
 
-        Активная P2P-сессия персистит файл сама (session.send_file); без неё —
-        локальный фолбэк, чтобы файл хотя бы не терялся молча из истории."""
+        Активная сессия (централизованная или P2P) персистит файл сама; без
+        неё — локальный фолбэк, чтобы файл хотя бы не терялся молча из истории.
+        """
+        if (
+            self.mode == CENTRALIZED
+            and self._central is not None
+            and self._central.session is not None
+        ):
+            self._central.send_file(conversation_id, filename, mime_type, data)
+            return None
         if self._service is not None and self._service.has_session(conversation_id):
             self._service.send_file(conversation_id, filename, mime_type, data)
             return None
@@ -128,6 +139,35 @@ class AppController:
             conversation_id, direction="out", body=data, status="local",
             kind="file", filename=filename, mime_type=mime_type,
         )
+
+    def fetch_media(self, message_id: int) -> bytes | None:
+        """Докачать байты вложения для сообщения «Центра», сохранённого лениво.
+
+        P2P-сообщения уже хранят тело сразу (сессия персистит его целиком при
+        приёме) — для них вызывать не нужно, вернёт ``None``."""
+        if (
+            self.mode == CENTRALIZED
+            and self._central is not None
+            and self._central.session is not None
+        ):
+            return self._central.fetch_media(message_id)
+        return None
+
+    def rename_conversation(self, conversation_id: int, title: str) -> None:
+        """Переименовать беседу локально (P2P-каналы: имя только на устройстве)."""
+        self.vault.conversations.rename(conversation_id, title)
+
+    def central_edit_message(self, message_id: int, text: str) -> None:
+        """Изменить своё сообщение «Центра» (сервер + vault)."""
+        if self._central is None or self._central.session is None:
+            raise RuntimeError("нет активной сессии «Центра»")
+        self._central.edit_message(message_id, text)
+
+    def central_delete_message(self, message_id: int) -> None:
+        """Удалить своё сообщение «Центра» (сервер + vault)."""
+        if self._central is None or self._central.session is None:
+            raise RuntimeError("нет активной сессии «Центра»")
+        self._central.delete_message(message_id)
 
     def delete_conversation(self, conversation_id: int) -> None:
         """Удалить беседу целиком: сессия -> сообщения -> ratchet-состояние -> беседа.

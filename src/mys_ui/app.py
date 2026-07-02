@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QApplication
 from mys_centralized import CentralizedService
 from mys_decentralized import P2PService
 
+from . import prefs
 from .controller import AppController
 from .theme import app_icon, apply_theme
 from .windows.frameless import FramelessWindow
@@ -71,7 +72,7 @@ class AppShell(FramelessWindow):
 
 def main() -> None:
     app = QApplication(sys.argv)
-    apply_theme(app, "dark")
+    apply_theme(app, prefs.load_theme())  # тема сохраняется между запусками
     app.setWindowIcon(app_icon())
     shell = AppShell(
         AppController(central_factory=_central_factory, p2p_factory=_p2p_factory)

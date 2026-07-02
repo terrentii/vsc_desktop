@@ -36,6 +36,15 @@ def test_remote_message_roundtrip_fields():
     )
     assert m.room_id == 2
     assert m.client_msg_id == "c-1"
+    assert m.media is None
+
+
+def test_remote_message_media_field():
+    m = RemoteMessage(
+        id=11, room_id=2, sender="bob", body="", created_at="2026-05-30T12:00:00",
+        media="abc123_photo.png",
+    )
+    assert m.media == "abc123_photo.png"
 
 
 def test_cursor_serialization():
