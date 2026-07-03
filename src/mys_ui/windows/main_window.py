@@ -6,6 +6,7 @@
 import mimetypes
 import os
 import threading
+import time
 
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
@@ -30,7 +31,13 @@ from mys_ui.dialogs.settings import SettingsDialog
 from mys_ui.widgets.chat_view import ChatView
 from mys_ui.widgets.conversation_list import ConversationList
 from mys_ui.widgets.message_input import MessageInput
+from mys_ui.widgets.p2p_banner import P2POfflineBanner
 from mys_ui.widgets.top_bar import TopBar
+
+# Единый лимит ожидания пира (новый канал и реконнект) — 5 минут; используется и
+# для реального таймаута сервиса, и для обратного отсчёта в P2POfflineBanner,
+# чтобы визуальный таймер не мог разойтись с фактическим.
+_P2P_TIMEOUT_S = 300
 
 
 class _CentralBridge(QObject):
@@ -55,7 +62,7 @@ class _P2PBridge(QObject):
     state = Signal(int, str)
     error = Signal(object, str)
     connected = Signal(int)
-    connect_failed = Signal(str)
+    connect_failed = Signal(int, str)
     file_sent = Signal(int)
     file_error = Signal(str)
 
@@ -75,6 +82,16 @@ class MainWindow(QWidget):
         # Сообщения, для которых автозагрузка картинки уже провалилась в этой
         # сессии приложения — не долбим сеть повторно на каждой перерисовке.
         self._media_fetch_failed: set[int] = set()
+
+        # P2P «онлайн»/реконнект: online — есть ли прямо сейчас живая сессия
+        # (обновляется по колбэкам connected/disconnected, в т.ч. автоматическим
+        # при обрыве, см. P2PService._handle_disconnect); connecting — идёт
+        # попытка подключения (conv_id -> абсолютный дедлайн time.monotonic());
+        # banner_dismissed_for — беседа, для которой в ЭТОМ визите нажали
+        # «прочитать переписку» (плашка снова появится при следующем входе).
+        self._p2p_online: dict[int, bool] = {}
+        self._p2p_connecting: dict[int, float] = {}
+        self._p2p_banner_dismissed_for: int | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -135,6 +152,8 @@ class MainWindow(QWidget):
         self._p2p_bridge.error.connect(self._on_p2p_error)
         self._p2p_bridge.connected.connect(self._on_p2p_connected)
         self._p2p_bridge.connect_failed.connect(self._on_p2p_connect_failed)
+        self.p2p_banner.reconnect_requested.connect(self._on_p2p_reconnect_requested)
+        self.p2p_banner.read_history_requested.connect(self._on_p2p_read_history_requested)
         self._p2p_bridge.file_sent.connect(self._on_file_sent)
         self._p2p_bridge.file_error.connect(self._on_file_error)
         self._c.add_p2p_observer(
@@ -174,8 +193,12 @@ class MainWindow(QWidget):
         self._chat_name.setObjectName("ChatName")
         self._chat_sub = QLabel("")
         self._chat_sub.setObjectName("ChatSub")
+        self._chat_online = QLabel("")  # только P2P: «● В СЕТИ» / «● НЕ В СЕТИ»
+        self._chat_online.setObjectName("ChatOnline")
+        self._chat_online.hide()
         col.addWidget(self._chat_name)
         col.addWidget(self._chat_sub)
+        col.addWidget(self._chat_online)
         hh.addLayout(col, 1)
         self._chat_badge = QLabel("")
         self._chat_badge.setObjectName("ChatBadge")
@@ -206,7 +229,12 @@ class MainWindow(QWidget):
         self.input = MessageInput()
         cv.addWidget(self.chat, 1)
         cv.addWidget(self.input)
-        self._chat_stack.addWidget(chat_box)
+        self._chat_stack.addWidget(chat_box)  # индекс 1
+
+        # оверлей «собеседник офлайн» / ожидание подключения (P2P, индекс 2)
+        self.p2p_banner = P2POfflineBanner()
+        self._chat_stack.addWidget(self.p2p_banner)
+
         v.addWidget(self._chat_stack, 1)
 
         self._update_chat_header()
@@ -340,8 +368,8 @@ class MainWindow(QWidget):
     def refresh_conversations(self) -> None:
         self.conversations.populate(self._c.list_conversations())
 
-    def add_conversation(self, title: str, *, room_phrase: str | None = None) -> None:
-        self._c.create_conversation(title, room_phrase=room_phrase)
+    def add_conversation(self, title: str) -> None:
+        self._c.create_conversation(title)
         self.refresh_conversations()
 
     def _peer_label(self, conversation_id: int) -> str:
@@ -377,6 +405,9 @@ class MainWindow(QWidget):
         if self._current != conversation_id:
             self.input.clear_reply()  # «ответ на…» не переносится между беседами
         self._current = conversation_id
+        # Плашка «собеседник офлайн» должна появляться заново при каждом входе
+        # в беседу — сбрасываем дисмисс прошлого визита (см. P2POfflineBanner).
+        self._p2p_banner_dismissed_for = None
         self._show_messages(conversation_id)
         self._update_chat_header()
 
@@ -384,7 +415,7 @@ class MainWindow(QWidget):
         if self._c.mode == DECENTRALIZED:
             dialog = PhraseDialog(self)
             if dialog.exec() == QDialog.Accepted and dialog.phrase():
-                self._start_p2p_session(dialog.phrase())
+                self._begin_p2p_connect(phrase=dialog.phrase())
         else:
             title, ok = common.ask_text(self, "Новый диалог", "НАЗВАНИЕ")
             if ok and title:
@@ -515,11 +546,50 @@ class MainWindow(QWidget):
         if self._c.mode == DECENTRALIZED:
             self._chat_sub.setText("P2P · ШИФРОВАННЫЙ КАНАЛ")
             self._chat_badge.setText("E2E · RATCHET")
+            self._update_p2p_online_label()
         else:
             self._chat_sub.setText(f"ROOM {room}" if room else "ЦЕНТР")
             self._chat_badge.setText("soufos.ru")
+            self._chat_online.hide()
         self._chat_header.show()
-        self._chat_stack.setCurrentIndex(1)
+        self._update_p2p_stack_page()
+
+    def _update_p2p_online_label(self) -> None:
+        """Точка «В СЕТИ»/«НЕ В СЕТИ» рядом с именем беседы (только P2P)."""
+        online = self._p2p_online.get(self._current, False)
+        t = theme.tokens()
+        if online:
+            self._chat_online.setText("● В СЕТИ")
+            self._chat_online.setStyleSheet(f"color: {t['success']};")
+        else:
+            self._chat_online.setText("● НЕ В СЕТИ")
+            self._chat_online.setStyleSheet(f"color: {t['warn']};")
+        self._chat_online.show()
+
+    def _update_p2p_stack_page(self) -> None:
+        """Решить, что показать в области чата: сам чат, оверлей ожидания пира
+        (идёт подключение/реконнект) или плашку «офлайн» (P2P, не онлайн).
+
+        «Прочитать переписку» имеет приоритет над остальным: снимает оверлей
+        для этого визита, даже если подключение всё ещё идёт в фоне."""
+        if self._c.mode != DECENTRALIZED:
+            self._chat_stack.setCurrentIndex(1)
+            return
+        conv_id = self._current
+        if self._p2p_banner_dismissed_for == conv_id:
+            self._chat_stack.setCurrentIndex(1)
+            return
+        deadline = self._p2p_connecting.get(conv_id)
+        if deadline is not None:
+            remaining = max(0, round(deadline - time.monotonic()))
+            self.p2p_banner.start_countdown(remaining)
+            self._chat_stack.setCurrentIndex(2)
+            return
+        if self._p2p_online.get(conv_id, False):
+            self._chat_stack.setCurrentIndex(1)
+        else:
+            self.p2p_banner.set_idle()
+            self._chat_stack.setCurrentIndex(2)
 
     # --- real-time централизованного режима ------------------------------------
 
@@ -540,42 +610,104 @@ class MainWindow(QWidget):
 
     # --- real-time P2P-режима ---------------------------------------------------
 
-    def _start_p2p_session(self, phrase: str) -> None:
-        """Установить P2P-канал в фоновом потоке (хендшейк может занять секунды —
-        UI не должен зависать)."""
+    def _begin_p2p_connect(
+        self, *, phrase: str | None = None, conversation_id: int | None = None,
+    ) -> None:
+        """Единая точка входа в подключение P2P — новый канал (``phrase``) или
+        реконнект уже известной беседы (``conversation_id``, кнопка «Выйти на
+        связь»). Показывает окно ожидания с обратным отсчётом (5 минут) и
+        запускает попытку в фоновом потоке — хендшейк может занять время, UI не
+        должен зависать."""
         if not self._c.p2p_available():
             common.warn(self, "P2P недоступен", "P2P-сервис не сконфигурирован")
             return
+        if phrase is not None:
+            # Резолвим conv_id локально (без сети) — сразу показываем окно
+            # ожидания для ЭТОЙ беседы, не дожидаясь хендшейка.
+            try:
+                conv_id = self._c.p2p_resolve_conversation(phrase)
+            except Exception as exc:
+                common.warn(self, "P2P-канал не установлен", str(exc))
+                return
+        else:
+            conv_id = conversation_id
+        if conv_id in self._p2p_connecting:
+            return  # уже идёт попытка для этой беседы — повторный клик игнорируем
+        self._p2p_connecting[conv_id] = time.monotonic() + _P2P_TIMEOUT_S
+        self.refresh_conversations()
+        self.conversations.select(conv_id)
+        self._current = conv_id
+        self._show_messages(conv_id)
+        self._update_chat_header()
         self._set_status("Подключение…")
         threading.Thread(
-            target=self._p2p_connect_worker, args=(phrase,), name="mys-p2p-connect",
-            daemon=True,
+            target=self._p2p_connect_worker, args=(conv_id, phrase),
+            name="mys-p2p-connect", daemon=True,
         ).start()
 
-    def _p2p_connect_worker(self, phrase: str) -> None:
+    def _p2p_connect_worker(self, conv_id: int, phrase: str | None) -> None:
         try:
-            conv_id = self._c.create_conversation(phrase, room_phrase=phrase)
+            if phrase is not None:
+                self._c.p2p_start_session(phrase, timeout=_P2P_TIMEOUT_S)
+            else:
+                self._c.p2p_reconnect(conv_id, timeout=_P2P_TIMEOUT_S)
         except Exception as exc:
-            self._p2p_bridge.connect_failed.emit(str(exc))
+            self._p2p_bridge.connect_failed.emit(conv_id, str(exc))
             return
         self._p2p_bridge.connected.emit(conv_id)
 
     def _on_p2p_connected(self, conversation_id: int) -> None:
-        self.refresh_conversations()
-        self._set_status("Канал открыт")
-
-    def _on_p2p_connect_failed(self, message: str) -> None:
-        self._set_status("Ошибка подключения")
-        common.warn(self, "P2P-канал не установлен", message)
-
-    def _on_p2p_message(self, conversation_id: int) -> None:
+        self._p2p_connecting.pop(conversation_id, None)
+        self._p2p_online[conversation_id] = True
         self.refresh_conversations()
         if conversation_id == self._current:
+            self._show_messages(conversation_id)  # мог прийти prime и т.п.
+            self._update_chat_header()
+        self._set_status("Канал открыт")
+
+    def _on_p2p_connect_failed(self, conversation_id: int, message: str) -> None:
+        self._p2p_connecting.pop(conversation_id, None)
+        self._p2p_online[conversation_id] = False
+        self._set_status("Ошибка подключения")
+        if conversation_id == self._current:
+            # _update_chat_header() сама переключит плашку в idle (без note) —
+            # note выставляем ПОСЛЕ, иначе он тут же перезатрётся.
+            self._update_chat_header()
+            self.p2p_banner.set_idle(note=message)
+
+    def _on_p2p_reconnect_requested(self) -> None:
+        """Нажата «Выйти на связь» в плашке офлайн-беседы."""
+        if self._current is not None:
+            self._begin_p2p_connect(conversation_id=self._current)
+
+    def _on_p2p_read_history_requested(self) -> None:
+        """«Прочитать переписку» — снять оверлей для этого визита, не трогая
+        попытку подключения (если она идёт, продолжится в фоне)."""
+        if self._current is not None:
+            self._p2p_banner_dismissed_for = self._current
+            self._update_chat_header()
+
+    def _on_p2p_message(self, conversation_id: int) -> None:
+        self._p2p_online[conversation_id] = True
+        self.refresh_conversations()
+        if conversation_id == self._current:
+            self._update_chat_header()
             self._show_messages(conversation_id)
 
     def _on_p2p_state(self, conversation_id: int, state: str) -> None:
+        """``state`` — «connected»/«disconnected» (в т.ч. автоматически при
+        обрыве транспорта, см. ``P2PService._handle_disconnect``)."""
+        if state == "connected":
+            self._p2p_online[conversation_id] = True
+        elif state == "disconnected":
+            self._p2p_online[conversation_id] = False
         if conversation_id == self._current:
             self._set_status(state)
+            if self._c.mode == DECENTRALIZED:
+                # Обновляет точку «онлайн»; если чат сейчас читают (плашка уже
+                # отпущена в этом визите — см. _p2p_banner_dismissed_for), живой
+                # разрыв не выдёргивает плашку поверх открытой переписки.
+                self._update_chat_header()
 
     def _on_p2p_error(self, conversation_id, message: str) -> None:
         self._central_error = message
@@ -701,6 +833,8 @@ class MainWindow(QWidget):
         ):
             return
         self._c.delete_conversation(conversation_id)
+        self._p2p_online.pop(conversation_id, None)
+        self._p2p_connecting.pop(conversation_id, None)
         if self._current == conversation_id:
             self._current = None
             self.chat.clear()

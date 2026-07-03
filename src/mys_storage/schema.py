@@ -78,6 +78,13 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
         "ALTER TABLE messages ADD COLUMN reply_author TEXT",
         "ALTER TABLE messages ADD COLUMN reply_snippet TEXT",
     ]),
+    # v7 — реконнект P2P без повторного ввода фразы: PRS (вход CPace) хранится
+    # рядом с беседой, чтобы «Выйти на связь» могло возобновить канал по одному
+    # только conversation_id. Безопасно как есть — CPace рассчитан на повторное
+    # использование одного prs (не одноразовый секрет), а вся БД зашифрована.
+    (7, [
+        "ALTER TABLE conversations ADD COLUMN p2p_prs BLOB",
+    ]),
 ]
 
 TARGET_VERSION = MIGRATIONS[-1][0]

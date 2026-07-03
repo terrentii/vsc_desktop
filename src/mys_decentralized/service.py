@@ -51,7 +51,7 @@ class P2PService:
         on_message: OnMessage | None = None,
         on_state_change: OnStateChange | None = None,
         on_error: OnError | None = None,
-        connect_timeout: float = 10.0,
+        connect_timeout: float = 300.0,
         punch_timeout: float = 1.0,
         allow_direct: bool = True,
     ):
@@ -132,11 +132,33 @@ class P2PService:
     def start_session(self, phrase: str, *, timeout: float | None = None) -> int:
         """Поднять P2P-сессию из фразы; вернуть ``conversation_id``.
 
-        Блокирует до установления канала и хендшейка. Провал PAKE/таймаут пира
-        пробрасывается вызывающему (PAKEError/PeerUnavailable) для показа в UI.
+        Блокирует до установления канала и хендшейка (по умолчанию до
+        ``connect_timeout`` — 5 минут — пока пир не войдёт в комнату). Провал
+        PAKE/таймаут пира пробрасывается вызывающему (PAKEError/PeerUnavailable)
+        для показа в UI. ``timeout`` переопределяет ожидание пира на этот вызов.
         """
         budget = (timeout or self._connect_timeout) + 10.0
-        return self._submit(self._start_session(phrase), timeout=budget)
+        return self._submit(self._start_session(phrase, timeout), timeout=budget)
+
+    def resolve_conversation(self, phrase: str) -> int:
+        """Найти/завести беседу по фразе локально, без сети.
+
+        Только vault-операции (потокобезопасны сами по себе — не требуют event
+        loop сервиса) — можно звать из любого потока ДО ``start_session``, чтобы
+        сразу получить ``conversation_id`` и показать в UI окно ожидания пира,
+        не дожидаясь сетевого хендшейка."""
+        room_id, _prs = derive_room_params(phrase)
+        return self._conversation_for(room_id)
+
+    def reconnect(self, conversation_id: int, *, timeout: float | None = None) -> None:
+        """Возобновить P2P-канал уже известной беседы без повторного ввода фразы.
+
+        Требует, чтобы ``prs`` для этой беседы уже был сохранён (см.
+        ``start_session`` — сохраняет его при первом подключении); иначе —
+        ``RuntimeError`` с понятным текстом для UI. Блокирует так же, как
+        ``start_session`` (по умолчанию до 5 минут ожидания пира)."""
+        budget = (timeout or self._connect_timeout) + 10.0
+        self._submit(self._reconnect(conversation_id, timeout), timeout=budget)
 
     def send(self, conversation_id: int, text: str, *, timeout: float = 15.0) -> None:
         self._submit(self._send(conversation_id, text), timeout=timeout)
@@ -162,15 +184,42 @@ class P2PService:
                 return conv["id"]
         return self._vault.conversations.add(mode=self._mode, room_id=room_id)
 
-    async def _start_session(self, phrase: str) -> int:
+    async def _start_session(self, phrase: str, timeout: float | None = None) -> int:
         room_id, prs = derive_room_params(phrase)
         conv_id = self._conversation_for(room_id)
+        # Сохраняем PRS сразу — даже если сам коннект ниже провалится/истечёт по
+        # таймауту, беседа уже реконнектится дальше без повторного ввода фразы.
+        self._vault.conversations.set_prs(conv_id, prs)
+        await self._connect(conv_id, room_id, prs, timeout=timeout)
+        return conv_id
+
+    async def _reconnect(self, conversation_id: int, timeout: float | None = None) -> None:
+        row = self._vault.conversations.get(conversation_id)
+        if row is None:
+            raise RuntimeError(f"беседа {conversation_id} не найдена")
+        room_id, prs = row.get("room_id"), row.get("p2p_prs")
+        if room_id is None or prs is None:
+            raise RuntimeError(
+                "для этого канала нет сохранённой фразы — откройте его заново "
+                "через «+ Новый канал» с той же фразой"
+            )
+        await self._connect(conversation_id, room_id, prs, timeout=timeout)
+
+    async def _connect(
+        self, conv_id: int, room_id: bytes, prs: bytes, *, timeout: float | None = None,
+    ) -> None:
+        """Общий путь установления канала — первое подключение и реконнект.
+
+        Ждёт пира до ``timeout`` (или ``connect_timeout`` по умолчанию — 5 минут);
+        именно за это время должен успеть тоже подключиться собеседник (напр.
+        нажать «Выйти на связь» на своей стороне)."""
+        wait = timeout or self._connect_timeout
         udp = proto = rv = transport = None
         role = None
         try:
             udp, proto, local = await open_udp_endpoint()
             rv = await RendezvousClient(self._rendezvous_url).join(
-                room_id, [local], timeout=self._connect_timeout
+                room_id, [local], timeout=wait
             )
             role = rv.role
 
@@ -195,6 +244,7 @@ class P2PService:
             session = open_session(
                 self._vault, conv_id, transport, result.sk, result.ratchet_state,
                 on_message=lambda body, _cid=conv_id: self._on_message(_cid, body),
+                on_disconnect=lambda _cid=conv_id: self._handle_disconnect(_cid),
             )
             session.start()
             self._sessions[conv_id] = session
@@ -208,7 +258,6 @@ class P2PService:
                 except Exception:
                     pass
             self._on_state_change(conv_id, "connected")
-            return conv_id
         except Exception as exc:
             # Провал хендшейка/сети: закрыть всё, что успели открыть, иначе
             # утёкшее соединение держит rendezvous-сервер (wait_closed зависнет).
@@ -218,6 +267,17 @@ class P2PService:
                 udp.close()
             self._on_error(conv_id, exc)
             raise
+
+    def _handle_disconnect(self, conversation_id: int) -> None:
+        """Сессия сама обнаружила обрыв транспорта (не через ``stop_session``) —
+        снять её из активных и оповестить UI, что пир теперь офлайн.
+
+        Зовётся из ``Session._recv_loop`` — та работает как таск на loop-потоке
+        сервиса, поэтому состояние (``_sessions``/``_roles``) можно трогать
+        напрямую, без ``_submit``."""
+        if self._sessions.pop(conversation_id, None) is not None:
+            self._roles.pop(conversation_id, None)
+            self._on_state_change(conversation_id, "disconnected")
 
     async def _send(self, conversation_id: int, text: str) -> None:
         session = self._sessions.get(conversation_id)

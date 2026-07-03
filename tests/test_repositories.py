@@ -101,3 +101,12 @@ def test_conversation_rename(tmp_path):
     v.conversations.rename(conv, "новое имя")
     assert v.conversations.get(conv)["title"] == "новое имя"
     v.close()
+
+
+def test_conversation_set_prs_round_trip(tmp_path):
+    v = _vault(tmp_path)
+    conv = v.conversations.add(mode="decentralized", room_id=b"room-id")
+    assert v.conversations.get(conv)["p2p_prs"] is None
+    v.conversations.set_prs(conv, b"p" * 32)
+    assert v.conversations.get(conv)["p2p_prs"] == b"p" * 32
+    v.close()

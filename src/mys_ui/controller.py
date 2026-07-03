@@ -78,13 +78,10 @@ class AppController:
     def list_conversations(self) -> list[dict]:
         return self.vault.conversations.list(self.mode)
 
-    def create_conversation(self, title: str, *, room_phrase: str | None = None) -> int:
-        # В децентрализованном режиме с фразой и сконфигурированным P2P — реальная
-        # сессия (фраза → PAKE → канал); беседа создаётся/находится по room_id.
-        # Иначе (нет сети/фразы) — локальная заглушка. Блокирует до установления
-        # канала (или ошибки) — вызывающий (UI) должен уводить это в фоновый поток.
-        if self.mode == DECENTRALIZED and room_phrase and self._p2p_factory is not None:
-            return self._ensure_p2p().start_session(room_phrase)
+    def create_conversation(self, title: str) -> int:
+        # Установление P2P-канала по фразе идёт через p2p_resolve_conversation +
+        # p2p_start_session (двухфазно: UI получает conv_id и показывает окно
+        # ожидания пира ДО сетевого хендшейка, см. MainWindow._begin_p2p_connect).
         # Централизованный режим с активной сессией — реальная серверная комната
         # (создаётся на сервере, синкается в локальную беседу). Иначе — заглушка.
         if (
@@ -189,6 +186,26 @@ class AppController:
     def p2p_available(self) -> bool:
         """Сконфигурирован ли P2P-сервис (есть фабрика или уже подключён извне)."""
         return self._p2p_factory is not None or self._service is not None
+
+    def p2p_resolve_conversation(self, phrase: str) -> int:
+        """Найти/завести P2P-беседу по фразе локально, без сети (см.
+        ``P2PService.resolve_conversation``) — чтобы UI показал окно ожидания
+        пира сразу, не дожидаясь фактического подключения."""
+        return self._ensure_p2p().resolve_conversation(phrase)
+
+    def p2p_start_session(self, phrase: str, *, timeout: float | None = None) -> int:
+        """Установить новый P2P-канал по фразе (см. ``P2PService.start_session``).
+        Блокирует — вызывать из фонового потока."""
+        return self._ensure_p2p().start_session(phrase, timeout=timeout)
+
+    def p2p_reconnect(self, conversation_id: int, *, timeout: float | None = None) -> None:
+        """Возобновить P2P-канал уже известной беседы без повторного ввода фразы
+        (см. ``P2PService.reconnect``). Блокирует — вызывать из фонового потока."""
+        self._ensure_p2p().reconnect(conversation_id, timeout=timeout)
+
+    def p2p_has_session(self, conversation_id: int) -> bool:
+        """Есть ли прямо сейчас живая P2P-сессия для беседы («онлайн»)."""
+        return self._service is not None and self._service.has_session(conversation_id)
 
     def add_p2p_observer(self, *, on_message=None, on_state_change=None, on_error=None) -> None:
         """Подписаться на события P2P-сервиса (UI маршалит в Qt)."""

@@ -373,3 +373,65 @@ async def test_close_clears_pending_files(tmp_path, monkeypatch):
     assert sb._pending_files == {}
 
     await sa.close()
+
+
+# --- оповещение об обрыве (on_disconnect) ---------------------------------------
+
+async def test_on_disconnect_fires_when_transport_closed_by_peer(tmp_path):
+    """Транспорт обрывается НЕ через Session.close() (здесь это имитируется
+    закрытием противоположного конца in-memory пары — «пир пропал») — сессия
+    должна вызвать on_disconnect, а не тихо погаснуть."""
+    av, ca, bv, cb = _two_vaults(tmp_path)
+    sk = b"k" * 32
+    _a_state, b_state = _seed_states(sk)
+    ta, tb = InMemoryTransport.connected_pair()
+
+    disconnected = []
+    sb = open_session(
+        bv, cb, tb, sk, b_state, on_disconnect=lambda: disconnected.append(True)
+    )
+    sb.start()
+
+    await ta.close()  # со стороны «Алисы» транспорт закрылся — Боб узнаёт об этом
+
+    await _wait_for(lambda: disconnected == [True])
+    await sb.close()
+
+
+async def test_on_disconnect_not_fired_on_explicit_close(tmp_path):
+    """Штатное закрытие своей же сессии (Session.close()) — это НЕ «пир пропал»,
+    on_disconnect звать не нужно (вызывающий код и так знает, что сам закрыл)."""
+    av, ca, bv, cb = _two_vaults(tmp_path)
+    sk = b"k" * 32
+    _a_state, b_state = _seed_states(sk)
+    _ta, tb = InMemoryTransport.connected_pair()
+
+    disconnected = []
+    sb = open_session(
+        bv, cb, tb, sk, b_state, on_disconnect=lambda: disconnected.append(True)
+    )
+    sb.start()
+    await asyncio.sleep(0.02)  # дать recv_loop стартовать
+
+    await sb.close()
+    await asyncio.sleep(0.02)
+    assert disconnected == []
+
+
+async def test_on_disconnect_callback_error_does_not_break_recv_loop(tmp_path):
+    """Best-effort: если сам колбэк бросает исключение, это не должно ронять
+    Session — сессия остаётся в валидном (закрытом) состоянии."""
+    av, ca, bv, cb = _two_vaults(tmp_path)
+    sk = b"k" * 32
+    _a_state, b_state = _seed_states(sk)
+    ta, tb = InMemoryTransport.connected_pair()
+
+    def _boom():
+        raise RuntimeError("колбэк сломан")
+
+    sb = open_session(bv, cb, tb, sk, b_state, on_disconnect=_boom)
+    sb.start()
+
+    await ta.close()
+    await asyncio.sleep(0.05)  # не должно упасть/зависнуть
+    await sb.close()

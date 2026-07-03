@@ -104,6 +104,13 @@ class ConversationsRepo(_Base):
         cur.row_factory = _row_factory
         return cur.fetchall()
 
+    def set_prs(self, conversation_id: int, prs: bytes) -> None:
+        """Сохранить PRS (вход CPace) для беглого реконнекта P2P без фразы."""
+        self._c.execute(
+            "UPDATE conversations SET p2p_prs=? WHERE id=?", (prs, conversation_id)
+        )
+        self._c.commit()
+
     def rename(self, conversation_id: int, title: str) -> None:
         """Локальное переименование беседы (заголовок живёт только в vault)."""
         self._c.execute(

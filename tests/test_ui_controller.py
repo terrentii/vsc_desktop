@@ -78,6 +78,10 @@ class _FakeP2PService:
         self._active = active_conv
         self.sent_files: list[tuple] = []
         self.stopped: list[int] = []
+        self.resolved: list[str] = []
+        self.reconnected: list[tuple[int, float | None]] = []
+        self.started: list[tuple[str, float | None]] = []
+        self.reconnect_error: Exception | None = None
 
     def has_session(self, conversation_id: int) -> bool:
         return conversation_id == self._active
@@ -87,6 +91,19 @@ class _FakeP2PService:
 
     def stop_session(self, conversation_id: int) -> None:
         self.stopped.append(conversation_id)
+
+    def resolve_conversation(self, phrase: str) -> int:
+        self.resolved.append(phrase)
+        return 999
+
+    def start_session(self, phrase: str, *, timeout=None) -> int:
+        self.started.append((phrase, timeout))
+        return 999
+
+    def reconnect(self, conversation_id: int, *, timeout=None) -> None:
+        self.reconnected.append((conversation_id, timeout))
+        if self.reconnect_error is not None:
+            raise self.reconnect_error
 
     def stop(self) -> None:
         pass  # уборка при c.lock()
@@ -244,3 +261,55 @@ def test_prefs_roundtrip(tmp_path):
     assert prefs.load_mode() == "centralized"
     prefs.save_mode("мусор")                      # не сохраняется
     assert prefs.load_mode() == "centralized"
+
+
+def test_p2p_resolve_start_reconnect_delegate_to_service(tmp_path):
+    c = _controller(tmp_path)
+    c.create_vault(b"pw")
+    fake = _FakeP2PService()
+    c.attach_service(fake)
+
+    conv_id = c.p2p_resolve_conversation("общая фраза")
+    assert conv_id == 999
+    assert fake.resolved == ["общая фраза"]
+
+    started = c.p2p_start_session("общая фраза", timeout=300)
+    assert started == 999
+    assert fake.started == [("общая фраза", 300)]
+
+    c.p2p_reconnect(42, timeout=300)
+    assert fake.reconnected == [(42, 300)]
+    c.lock()
+
+
+def test_p2p_reconnect_propagates_service_error(tmp_path):
+    c = _controller(tmp_path)
+    c.create_vault(b"pw")
+    fake = _FakeP2PService()
+    fake.reconnect_error = RuntimeError("нет сохранённого prs")
+    c.attach_service(fake)
+
+    with pytest.raises(RuntimeError):
+        c.p2p_reconnect(42)
+    c.lock()
+
+
+def test_p2p_has_session_reflects_active_service(tmp_path):
+    c = _controller(tmp_path)
+    c.create_vault(b"pw")
+    assert c.p2p_has_session(1) is False  # сервис ещё не подключён
+    fake = _FakeP2PService(active_conv=1)
+    c.attach_service(fake)
+    assert c.p2p_has_session(1) is True
+    assert c.p2p_has_session(2) is False
+    c.lock()
+
+
+def test_create_conversation_no_longer_accepts_room_phrase(tmp_path):
+    """room_phrase убран из create_conversation — P2P-подключение теперь идёт
+    через p2p_resolve_conversation/p2p_start_session (двухфазно, см. MainWindow)."""
+    c = _controller(tmp_path)
+    c.create_vault(b"pw")
+    with pytest.raises(TypeError):
+        c.create_conversation("канал", room_phrase="фраза")
+    c.lock()

@@ -16,7 +16,7 @@ from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
 
 from .errors import TransportError
-from .protocol import Hello, Pair, Relay, Role, decode_message, encode_message
+from .protocol import Hello, Pair, PeerLeft, Relay, Role, decode_message, encode_message
 
 
 @dataclass
@@ -86,5 +86,14 @@ class RendezvousServer:
                 room = self._rooms.get(room_id)
                 if room is not None and member in room:
                     room.remove(member)
+                    # Оставшийся участник узнаёт об уходе пира явно — иначе его
+                    # собственное WS-соединение с сервером продолжает жить как
+                    # ни в чём не бывало (relay лишь перестаёт получать кадры),
+                    # и «онлайн»-статус на его стороне навсегда завис бы в True.
+                    for other in room:
+                        try:
+                            await other.ws.send(encode_message(PeerLeft()))
+                        except ConnectionClosed:
+                            pass
                     if not room:
                         self._rooms.pop(room_id, None)

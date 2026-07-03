@@ -283,6 +283,12 @@ QLabel#ChatSub {{
     font-family: {FONT_MONO};
     font-size: 16px;
 }}
+QLabel#ChatOnline {{
+    font-family: {FONT_MONO};
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: .06em;
+}}
 QLabel#FounderBadge {{
     background: {t['cobalt']};
     color: #ffffff;
@@ -313,6 +319,37 @@ QLabel#EmptyState {{
     font-family: {FONT_MONO};
     font-size: 13px;
 }}
+
+/* ---- оверлей «собеседник офлайн» (P2P) ---- */
+QWidget#P2POfflineBanner {{ background: {t['bg']}; }}
+QLabel#P2PBannerTitle {{
+    color: {t['text']};
+    font-family: {FONT_MONO};
+    font-weight: 700;
+    font-size: 22px;
+    letter-spacing: .08em;
+}}
+QLabel#P2PBannerSubtitle {{
+    color: {t['text2']};
+    font-size: 17px;
+}}
+QLabel#P2PBannerNote {{
+    color: {t['warn']};
+    font-family: {FONT_MONO};
+    font-size: 14px;
+}}
+QLabel#P2PBannerCountdown {{
+    color: {t['accent']};
+    font-family: {FONT_MONO};
+    font-weight: 700;
+    font-size: 44px;
+}}
+QLabel#P2PBannerLink {{
+    color: {t['text3']};
+    font-family: {FONT_MONO};
+    font-size: 14px;
+}}
+QLabel#P2PBannerLink a {{ color: {t['accent']}; text-decoration: none; }}
 
 /* ---- строка ввода ---- */
 QWidget#InputBar {{

@@ -48,6 +48,7 @@ class Session:
         vault,
         conversation_id: int,
         on_message: OnMessage | None = None,
+        on_disconnect: Callable[[], None] | None = None,
     ):
         self._transport = transport
         self._state = state
@@ -55,6 +56,9 @@ class Session:
         self._vault = vault
         self._conv = conversation_id
         self._on_message = on_message
+        # Зовётся, только когда транспорт оборвался НЕ через close() (см.
+        # _recv_loop) — сигнал «пир пропал», а не штатное закрытие сессии.
+        self._on_disconnect = on_disconnect
         self._lock = asyncio.Lock()  # сериализует доступ к ratchet (send vs recv)
         self._recv_task: asyncio.Task | None = None
         self._running = False
@@ -184,7 +188,25 @@ class Session:
                 frame = await self._transport.recv()
                 await self._handle_frame(frame)
         except TransportError:
-            pass  # транспорт закрыт/оборван — выходим из цикла
+            # Обрыв транспорта САМ ПО СЕБЕ (не через close(), тот отменяет задачу
+            # через CancelledError, сюда не попадает) — пир пропал. Транспорт
+            # мог остаться формально ОТКРЫТЫМ (напр. PEER_LEFT от сервера: наш
+            # собственный WS до сервера жив, ушёл только пир) — закрываем сами,
+            # иначе соединение зависает навсегда и комната на сервере никогда
+            # не опустеет. close() у транспортов идемпотентен (повторный вызов
+            # из Session.close(), если её всё же позовут следом, безопасен).
+            try:
+                await self._transport.close()
+            except Exception:
+                pass
+            # Оповестить вышестоящий слой (P2PService), чтобы он снял «онлайн»
+            # и убрал мёртвую сессию из активных. Best-effort: колбэк не должен
+            # ронять цикл приёма, если сам бросит исключение.
+            if self._on_disconnect is not None:
+                try:
+                    self._on_disconnect()
+                except Exception:
+                    pass
 
     async def _handle_frame(self, frame: bytes) -> None:
         try:
@@ -292,6 +314,7 @@ def open_session(
     sk: bytes,
     seed_state,
     on_message: OnMessage | None = None,
+    on_disconnect: Callable[[], None] | None = None,
 ) -> Session:
     """Собрать сессию, возобновив или посеяв ratchet (ветка реконнекта, §6).
 
@@ -307,4 +330,7 @@ def open_session(
     else:
         state = seed_state
         vault.ratchet.save_state(conversation_id, state)
-    return Session(transport, state, transform_key, vault, conversation_id, on_message)
+    return Session(
+        transport, state, transform_key, vault, conversation_id, on_message,
+        on_disconnect,
+    )

@@ -53,6 +53,7 @@ class MsgType(IntEnum):
     PAKE = 6        # CPace-сообщение (Y) — открыто по дизайну PAKE
     CONFIRM = 7     # key-confirmation MAC
     DATA = 8        # E2E-защищённый envelope.seal(...)
+    PEER_LEFT = 9   # сервер → клиент: второй участник комнаты отключился
 
 
 class Role(IntEnum):
@@ -268,7 +269,26 @@ class PunchAck:
         return cls()
 
 
-Message = Hello | Pair | Pake | Confirm | Data | Relay | Punch | PunchAck
+@dataclass
+class PeerLeft:
+    """Сервер → оставшемуся участнику: второй пир покинул комнату.
+
+    Только на relay-пути (тот же WS до сервера, на котором ходят RELAY-кадры);
+    сервер не парсит и не хранит ничего о содержимом — лишь факт членства в
+    комнате, который он и так знает (кто вошёл/вышел), поэтому это не новая
+    утечка метаданных."""
+
+    TYPE = MsgType.PEER_LEFT
+
+    def payload(self) -> bytes:
+        return b""
+
+    @classmethod
+    def parse(cls, payload: bytes) -> "PeerLeft":
+        return cls()
+
+
+Message = Hello | Pair | Pake | Confirm | Data | Relay | Punch | PunchAck | PeerLeft
 
 _PARSERS: dict[MsgType, type] = {
     MsgType.HELLO: Hello,
@@ -279,6 +299,7 @@ _PARSERS: dict[MsgType, type] = {
     MsgType.RELAY: Relay,
     MsgType.PUNCH: Punch,
     MsgType.PUNCH_ACK: PunchAck,
+    MsgType.PEER_LEFT: PeerLeft,
 }
 
 

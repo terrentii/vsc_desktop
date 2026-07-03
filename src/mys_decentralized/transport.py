@@ -21,6 +21,7 @@ from websockets.exceptions import ConnectionClosed
 
 from .errors import TransportError
 from .protocol import (
+    PeerLeft,
     Punch,
     PunchAck,
     Relay,
@@ -117,6 +118,13 @@ class RelayTransport(Transport):
         except ConnectionClosed as exc:
             raise TransportError("relay-соединение закрыто") from exc
         msg, _consumed = decode_message(message)
+        if isinstance(msg, PeerLeft):
+            # Сервер сигналит уход пира отдельным кадром (не RELAY, не от пира —
+            # само соединение с сервером живо). Для вызывающего это ничем не
+            # отличается от обрыва транспорта: сессия узнаёт об этом тем же
+            # путём (см. Session._recv_loop → on_disconnect), что и настоящий
+            # разрыв WS.
+            raise TransportError("пир покинул комнату")
         if not isinstance(msg, Relay):
             raise TransportError("ожидался RELAY-кадр")
         return msg.payload()

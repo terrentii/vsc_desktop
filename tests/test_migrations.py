@@ -48,7 +48,7 @@ def test_migrate_adds_media_ref_column():
     migrations.migrate(conn)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
     assert "media_ref" in cols
-    assert migrations.TARGET_VERSION == 6
+    assert migrations.TARGET_VERSION == 7
 
 
 def test_migrate_adds_reply_columns():
@@ -56,3 +56,10 @@ def test_migrate_adds_reply_columns():
     migrations.migrate(conn)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
     assert {"reply_author", "reply_snippet"} <= cols
+
+
+def test_migrate_adds_p2p_prs_column():
+    conn = _conn()
+    migrations.migrate(conn)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(conversations)").fetchall()}
+    assert "p2p_prs" in cols

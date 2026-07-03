@@ -108,6 +108,11 @@ def test_punch_round_trip():
     assert isinstance(ack, p.PunchAck)
 
 
+def test_peer_left_round_trip():
+    out, _ = p.decode_message(p.encode_message(p.PeerLeft()))
+    assert isinstance(out, p.PeerLeft)
+
+
 def test_decode_message_unknown_type_rejected():
     raw = bytes([0xFE, 0, 0, 0, 0, 0])  # тип 0xFE не определён
     with pytest.raises(TransportError):
