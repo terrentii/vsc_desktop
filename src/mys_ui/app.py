@@ -1,5 +1,6 @@
 """Точка входа: QApplication и маршрутизация окон вход ↔ главное."""
 
+import os
 import sys
 
 from PySide6.QtWidgets import QApplication
@@ -15,7 +16,8 @@ from .windows.main_window import MainWindow
 from .windows.unlock import UnlockWindow
 
 # Rendezvous-эндпоинт P2P: один порт с веб-сервером, wss:// (см. CLAUDE.md).
-_RENDEZVOUS_URL = "wss://soufos.ru/p2p"
+# MYS_RENDEZVOUS_URL — переопределение для LAN-проверки (scripts/run_rendezvous.py).
+_RENDEZVOUS_URL = os.environ.get("MYS_RENDEZVOUS_URL", "wss://soufos.ru/p2p")
 
 
 def _central_factory(vault, *, on_message, on_state_change, on_error):
