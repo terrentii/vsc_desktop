@@ -19,7 +19,7 @@ class CentralLoginDialog(FramelessDialog):
 
         self.server = BrutalLineEdit(default_url)
         self.username = BrutalLineEdit()
-        self.username.setPlaceholderText("terrentii")
+        self.username.setPlaceholderText("имя пользователя")
         self.password = BrutalLineEdit()
         self.password.setEchoMode(QLineEdit.Password)
         self.password.setPlaceholderText("••••••••")

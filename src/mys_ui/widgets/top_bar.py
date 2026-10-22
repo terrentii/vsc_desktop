@@ -31,6 +31,7 @@ class TopBar(QWidget):
 
         # чипы статуса
         self.chip = QLabel("")
+        self.chip.setTextFormat(Qt.PlainText)
         self.chip.setObjectName("Chip")
         self.chip.hide()
         self.btn_login = BrutalButton("Войти в Центр", "primary", small=True)
@@ -61,6 +62,9 @@ class TopBar(QWidget):
 
     def update_status(self, mode: str, *, account: str | None) -> None:
         """Отразить режим/сессию: P2P-чип «анонимно», аккаунт-чип или «Войти»."""
+        # вкладки — всегда по фактическому режиму (он мог смениться не кликом)
+        self.btn_p2p.setChecked(mode == DECENTRALIZED)
+        self.btn_central.setChecked(mode == CENTRALIZED)
         if mode == DECENTRALIZED:
             self.chip.setText("● АНОНИМНО")
             self.chip.show()
