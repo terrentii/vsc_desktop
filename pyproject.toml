@@ -17,6 +17,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-qt>=4.4", "pytest-asyncio>=0.23"]
+# Прямой канал WebRTC (P2P без relay); без него сессии идут через сервер.
+webrtc = ["aiortc>=1.9"]
 
 # Точка входа GUI: pip создаёт исполняемый файл `mys-desktop` в bin/ окружения.
 [project.gui-scripts]

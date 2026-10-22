@@ -16,12 +16,9 @@ from .rendezvous_server import RendezvousServer
 from .service import P2PService
 from .session import Session, open_session
 from .transport import (
-    DirectTransport,
     InMemoryTransport,
     RelayTransport,
     Transport,
-    establish_transport,
-    open_udp_endpoint,
 )
 
 __all__ = [
@@ -38,9 +35,6 @@ __all__ = [
     "Transport",
     "InMemoryTransport",
     "RelayTransport",
-    "DirectTransport",
-    "establish_transport",
-    "open_udp_endpoint",
     "Session",
     "open_session",
     "P2PService",

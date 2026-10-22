@@ -16,11 +16,7 @@ from .handshake import handshake
 from .protocol import Role, derive_room_params
 from .rendezvous import RendezvousClient
 from .session import Session, open_session
-from .transport import (
-    RelayTransport,
-    establish_transport,
-    open_udp_endpoint,
-)
+from .transport import RelayTransport
 
 OnMessage = Callable[[int, bytes], None]
 OnStateChange = Callable[[int, str], None]
@@ -52,9 +48,10 @@ class P2PService:
         on_state_change: OnStateChange | None = None,
         on_error: OnError | None = None,
         connect_timeout: float = 300.0,
-        punch_timeout: float = 1.0,
-        allow_direct: bool = True,
+        direct_factory=None,
     ):
+        """``direct_factory`` — фабрика DirectLink (WebRTC, см. :mod:`.webrtc`);
+        None — только relay. Состояния пути — ``on_state_change(cid, "direct"|"relay")``."""
         self._vault = vault
         self._rendezvous_url = rendezvous_url
         self._mode = mode
@@ -62,8 +59,8 @@ class P2PService:
         self._on_state_change = on_state_change or _noop
         self._on_error = on_error or _noop
         self._connect_timeout = connect_timeout
-        self._punch_timeout = punch_timeout
-        self._allow_direct = allow_direct
+        self._direct_factory = direct_factory
+        self._links: dict = {}
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -112,6 +109,9 @@ class P2PService:
         self._ready.clear()
 
     async def _shutdown(self) -> None:
+        for link in list(self._links.values()):
+            link.close()
+        self._links.clear()
         for session in list(self._sessions.values()):
             await session.close()
         self._sessions.clear()
@@ -121,6 +121,10 @@ class P2PService:
 
     def has_session(self, conversation_id: int) -> bool:
         return conversation_id in self._sessions
+
+    def is_direct(self, conversation_id: int) -> bool:
+        session = self._sessions.get(conversation_id)
+        return session is not None and session.is_direct
 
     def role_of(self, conversation_id: int) -> Role | None:
         """Роль в беседе (INITIATOR/RESPONDER) — назначена rendezvous-сервером.
@@ -214,41 +218,28 @@ class P2PService:
         именно за это время должен успеть тоже подключиться собеседник (напр.
         нажать «Выйти на связь» на своей стороне)."""
         wait = timeout or self._connect_timeout
-        udp = proto = rv = transport = None
+        rv = transport = None
         role = None
         try:
-            udp, proto, local = await open_udp_endpoint()
-            rv = await RendezvousClient(self._rendezvous_url).join(
-                room_id, [local], timeout=wait
-            )
+            # Кандидатов не анонсируем: прямой путь — WebRTC поверх готовой сессии.
+            rv = await RendezvousClient(self._rendezvous_url).join(room_id, [], timeout=wait)
             role = rv.role
-
-            async def relay_factory():
-                return RelayTransport.from_rendezvous(rv)
-
-            if self._allow_direct:
-                transport = await establish_transport(
-                    udp, proto, rv.peer_candidates, relay_factory,
-                    punch_timeout=self._punch_timeout,
-                )
-            else:
-                udp.close()
-                udp = None
-                transport = await relay_factory()
-
-            if not isinstance(transport, RelayTransport):
-                await rv.close()  # на прямом пути rendezvous больше не нужен
-                rv = None
+            transport = RelayTransport.from_rendezvous(rv)
 
             result = await handshake(transport, prs, role)
+            link = self._direct_factory() if self._direct_factory is not None else None
             session = open_session(
                 self._vault, conv_id, transport, result.sk, result.ratchet_state,
                 on_message=lambda body, _cid=conv_id: self._on_message(_cid, body),
                 on_disconnect=lambda _cid=conv_id: self._handle_disconnect(_cid),
+                on_signal=link.on_signal if link is not None else None,
+                on_direct_closed=lambda _cid=conv_id: self._on_state_change(_cid, "relay"),
             )
-            session.start()
             self._sessions[conv_id] = session
             self._roles[conv_id] = role
+            if link is not None:
+                self._start_direct(conv_id, session, role, link)
+            session.start()
             # INITIATOR праймит ratchet ответчика: шлёт первое (служебное) сообщение,
             # из которого RESPONDER выводит свою отправляющую цепочку (порядок
             # отправки в Double Ratchet). Best-effort — провал не рушит сессию.
@@ -263,10 +254,39 @@ class P2PService:
             # утёкшее соединение держит rendezvous-сервер (wait_closed зависнет).
             await _safe_close(transport)
             await _safe_close(rv)
-            if udp is not None:
-                udp.close()
             self._on_error(conv_id, exc)
             raise
+
+    def _start_direct(self, conv_id: int, session, role, link) -> None:
+        """Прямой канал поверх живой сессии. Обрыв — откат на relay (сессия
+        жива); INITIATOR повторяет offer через 10 с, затем с backoff до 2 мин."""
+        self._links[conv_id] = link
+        backoff = [10.0]
+
+        def opened(transport):
+            if self._sessions.get(conv_id) is session:
+                session.attach_direct(transport)
+                backoff[0] = 10.0
+                self._on_state_change(conv_id, "direct")
+
+        def closed():
+            if role != Role.INITIATOR:
+                return
+
+            async def retry():
+                await asyncio.sleep(backoff[0])
+                backoff[0] = min(backoff[0] * 2, 120.0)
+                if self._sessions.get(conv_id) is session:
+                    link.restart()
+
+            asyncio.ensure_future(retry())
+
+        link.start(
+            role == Role.INITIATOR,
+            lambda data: asyncio.ensure_future(session.send_signal(data)),
+            opened,
+            closed,
+        )
 
     def _handle_disconnect(self, conversation_id: int) -> None:
         """Сессия сама обнаружила обрыв транспорта (не через ``stop_session``) —
@@ -275,6 +295,9 @@ class P2PService:
         Зовётся из ``Session._recv_loop`` — та работает как таск на loop-потоке
         сервиса, поэтому состояние (``_sessions``/``_roles``) можно трогать
         напрямую, без ``_submit``."""
+        link = self._links.pop(conversation_id, None)
+        if link is not None:
+            link.close()
         if self._sessions.pop(conversation_id, None) is not None:
             self._roles.pop(conversation_id, None)
             self._on_state_change(conversation_id, "disconnected")
@@ -294,6 +317,9 @@ class P2PService:
         await session.send_file(filename, mime_type, data)
 
     async def _stop_session(self, conversation_id: int) -> None:
+        link = self._links.pop(conversation_id, None)
+        if link is not None:
+            link.close()
         session = self._sessions.pop(conversation_id, None)
         self._roles.pop(conversation_id, None)
         if session is not None:
