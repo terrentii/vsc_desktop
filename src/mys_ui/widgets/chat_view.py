@@ -48,31 +48,34 @@ class MessageRow(QWidget):
         self.when = when
         self.raw_body = body
         self.setObjectName("MessageRow")
+        # без WA_StyledBackground QSS-граница у подкласса QWidget не рисуется
+        self.setAttribute(Qt.WA_StyledBackground, True)
         t = theme.tokens()
+        # Метрики — как .msg в vsc_web: автор 17px, время 14px моно, текст 18px.
         self.setStyleSheet(
             f"#MessageRow {{ border-bottom: 1px solid {t['border2']}; }}"
         )
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 12, 20, 12)
-        root.setSpacing(4)
+        root.setContentsMargins(24, 14, 24, 14)
+        root.setSpacing(6)
 
         header = QHBoxLayout()
-        header.setSpacing(10)
+        header.setSpacing(12)
         name = QLabel(author)
         name.setTextFormat(Qt.PlainText)  # имя от собеседника — не рендерим как HTML
         nf = QFont()
+        nf.setFamilies(["GOST type B", "GOST 2.304 type A", "sans-serif"])
         nf.setBold(True)
-        nf.setPixelSize(13)
+        nf.setPixelSize(17)
         name.setFont(nf)
         name.setStyleSheet(f"color: {author_color};")
-        header.addWidget(name)
+        header.addWidget(name, 0, Qt.AlignBaseline)
         if when:
             time_lbl = QLabel(when)
-            time_lbl.setStyleSheet(
-                f"color: {t['text3']}; font-family: monospace; font-size: 10px;"
-            )
-            header.addWidget(time_lbl)
+            time_lbl.setFont(theme.mono_font(14))
+            time_lbl.setStyleSheet(f"color: {t['text3']};")
+            header.addWidget(time_lbl, 0, Qt.AlignBaseline)
         header.addStretch()
         root.addLayout(header)
 
@@ -80,11 +83,12 @@ class MessageRow(QWidget):
             if kind == "code":
                 root.addWidget(CodeBlock(seg))
             else:
-                lbl = QLabel(seg)
+                lbl = QLabel(seg.strip("\n"))
                 lbl.setTextFormat(Qt.PlainText)  # тело от собеседника — не рендерим как HTML
                 lbl.setWordWrap(True)
                 lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
-                lbl.setStyleSheet(f"color: {t['text']}; font-size: 14px;")
+                lbl.setCursor(Qt.IBeamCursor)
+                lbl.setStyleSheet(f"color: {t['text']}; font-size: 18px;")
                 root.addWidget(lbl)
 
         if media:
