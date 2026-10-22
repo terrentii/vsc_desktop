@@ -20,8 +20,12 @@ from .errors import TransportError
 KIND_TEXT = 0x00
 KIND_FILE_META = 0x01
 KIND_FILE_CHUNK = 0x02
+# Сигналинг WebRTC (JSON offer/answer/cand) — служебный, не сообщение.
+KIND_SIGNAL = 0x03
 
-CHUNK_SIZE = 256 * 1024          # 256 КиБ — с запасом под ~1 МиБ websockets max_size
+# 64 КиБ: влезает и в лимит сообщения WebRTC DataChannel (~256 КиБ), и под
+# ~1 МиБ websockets max_size. Получатель берёт размер из FILE_META.
+CHUNK_SIZE = 64 * 1024
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 МБ: получатель буферизует файл в памяти целиком
 TRANSFER_ID_LEN = 16
 

@@ -2,6 +2,7 @@
 
 import os
 import sys
+from urllib.parse import urlparse
 
 from PySide6.QtWidgets import QApplication
 
@@ -30,10 +31,23 @@ def _central_factory(vault, *, on_message, on_state_change, on_error):
     )
 
 
+def _direct_factory():
+    """Фабрика прямого канала WebRTC; None — aiortc не установлен (только relay)."""
+    try:
+        from mys_decentralized.webrtc import WebRtcLink
+    except ImportError:
+        return None
+    host = urlparse(_RENDEZVOUS_URL).hostname or ""
+    # STUN — на хосте сервера (coturn, 3478/udp); в локалке хватает host-кандидатов.
+    ice = [] if host in ("127.0.0.1", "localhost") else [f"stun:{host}:3478"]
+    return lambda: WebRtcLink(ice)
+
+
 def _p2p_factory(vault, *, on_message, on_state_change, on_error):
     return P2PService(
         vault,
         _RENDEZVOUS_URL,
+        direct_factory=_direct_factory(),
         on_message=on_message,
         on_state_change=on_state_change,
         on_error=on_error,

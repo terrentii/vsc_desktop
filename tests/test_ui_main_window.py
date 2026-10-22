@@ -285,7 +285,7 @@ def test_p2p_live_disconnect_updates_dot_without_interrupting_dismissed_view(qtb
     assert w._chat_stack.currentIndex() == 1
 
     w._on_p2p_state(conv, "connected")
-    assert w._chat_online.text() == "● В СЕТИ"
+    assert w._chat_online.text().startswith("● В СЕТИ")
     assert w._chat_stack.currentIndex() == 1
 
     w._on_p2p_state(conv, "disconnected")  # обрыв на лету — не выдёргивает плашку

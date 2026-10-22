@@ -49,8 +49,17 @@ class Session:
         conversation_id: int,
         on_message: OnMessage | None = None,
         on_disconnect: Callable[[], None] | None = None,
+        on_signal: Callable[[str], None] | None = None,
+        on_direct_closed: Callable[[], None] | None = None,
     ):
         self._transport = transport
+        # Прямой канал (WebRTC), если открыт: отправка по нему, приём — с обоих.
+        self._direct: Transport | None = None
+        self._direct_task: asyncio.Task | None = None
+        self._relay_alive = True
+        self._disconnected = False
+        self._on_signal = on_signal
+        self._on_direct_closed = on_direct_closed
         self._state = state
         self._tk = transform_key
         self._vault = vault
@@ -76,6 +85,63 @@ class Session:
         """Есть ли отправляющая цепочка ratchet (у RESPONDER появляется только
         после первого принятого сообщения; см. follow-up порядка отправки)."""
         return self._state.cks is not None
+
+    @property
+    def is_direct(self) -> bool:
+        return self._direct is not None
+
+    def attach_direct(self, transport: Transport) -> None:
+        """Подключить прямой канал (вызывать на loop сессии после ``start``)."""
+        old = self._direct
+        self._direct = transport
+        self._direct_task = asyncio.create_task(self._direct_loop(transport))
+        if old is not None:
+            asyncio.ensure_future(old.close())
+
+    async def _direct_loop(self, transport: Transport) -> None:
+        try:
+            while True:
+                await self._handle_frame(await transport.recv())
+        except TransportError:
+            await self._detach_direct(transport)
+
+    async def _detach_direct(self, transport: Transport) -> None:
+        """Прямой умер: сессия живёт на relay, а если и relay мёртв — разрыв."""
+        if self._direct is not transport:
+            return
+        self._direct = None
+        try:
+            await transport.close()
+        except Exception:
+            pass
+        if self._relay_alive:
+            if self._on_direct_closed is not None:
+                try:
+                    self._on_direct_closed()
+                except Exception:
+                    pass
+        else:
+            self._disconnect_once()
+
+    def _disconnect_once(self) -> None:
+        if self._disconnected:
+            return
+        self._disconnected = True
+        if self._on_disconnect is not None:
+            try:
+                self._on_disconnect()
+            except Exception:
+                pass
+
+    async def send_signal(self, data: str) -> None:
+        """Сигналинг WebRTC внутри E2E — не персистится и не показывается. Идёт
+        через relay: пир ещё не слушает прямой канал, пока не получит наш answer."""
+        async with self._lock:
+            if not self.can_send:
+                return
+            payload = bytes([filetransfer.KIND_SIGNAL]) + data.encode("utf-8")
+            await self._seal_and_send(payload, via_relay=self._relay_alive)
+            self._vault.ratchet.save_state(self._conv, self._state)
 
     def start(self) -> None:
         """Запустить фоновый цикл приёма (идемпотентно)."""
@@ -167,10 +233,21 @@ class Session:
             await self._seal_and_send(b"")
             self._vault.ratchet.save_state(self._conv, self._state)
 
-    async def _seal_and_send(self, data: bytes) -> None:
-        """Запечатать payload и отправить в транспорт (вызывать под self._lock)."""
+    async def _seal_and_send(self, data: bytes, *, via_relay: bool = False) -> None:
+        """Запечатать payload и отправить (вызывать под self._lock): по прямому
+        каналу, если он есть, при его ошибке — откат на relay."""
         sealed = envelope.seal(self._state, self._tk, data)
-        await self._transport.send(encode_message(Data(sealed)))
+        frame = encode_message(Data(sealed))
+        direct = self._direct
+        if direct is not None and not via_relay:
+            try:
+                await direct.send(frame)
+                return
+            except TransportError:
+                await self._detach_direct(direct)
+        if not self._relay_alive:
+            raise TransportError("нет живого канала к собеседнику")
+        await self._transport.send(frame)
 
     async def _flush_outbox_locked(self) -> None:
         """Отправить накопленные исходящие (вызывать под self._lock, когда есть cks)."""
@@ -188,6 +265,7 @@ class Session:
                 frame = await self._transport.recv()
                 await self._handle_frame(frame)
         except TransportError:
+            self._relay_alive = False
             # Обрыв транспорта САМ ПО СЕБЕ (не через close(), тот отменяет задачу
             # через CancelledError, сюда не попадает) — пир пропал. Транспорт
             # мог остаться формально ОТКРЫТЫМ (напр. PEER_LEFT от сервера: наш
@@ -200,13 +278,9 @@ class Session:
             except Exception:
                 pass
             # Оповестить вышестоящий слой (P2PService), чтобы он снял «онлайн»
-            # и убрал мёртвую сессию из активных. Best-effort: колбэк не должен
-            # ронять цикл приёма, если сам бросит исключение.
-            if self._on_disconnect is not None:
-                try:
-                    self._on_disconnect()
-                except Exception:
-                    pass
+            # и убрал мёртвую сессию из активных — если не живёт прямой канал.
+            if self._direct is None:
+                self._disconnect_once()
 
     async def _handle_frame(self, frame: bytes) -> None:
         try:
@@ -223,7 +297,11 @@ class Session:
                 # сессия продолжает работать.
                 return
             persist = None  # (kind, filename, mime_type, body) | None
-            if plaintext == b"":
+            signal = None
+            if plaintext[:1] == bytes([filetransfer.KIND_SIGNAL]):
+                signal = plaintext[1:].decode("utf-8", "replace")
+                self._vault.ratchet.save_state(self._conv, self._state)
+            elif plaintext == b"":
                 # prime-кадр: продвинул наш ratchet (теперь есть cks), но это не
                 # контент — не персистим сообщение, лишь сохраняем состояние.
                 self._vault.ratchet.save_state(self._conv, self._state)
@@ -247,6 +325,11 @@ class Session:
             await self._flush_outbox_locked()
         if persist is not None and self._on_message is not None:
             self._on_message(persist[3])
+        if signal is not None and self._on_signal is not None:
+            try:
+                self._on_signal(signal)
+            except Exception:
+                pass
 
     def _dispatch_content(self, plaintext: bytes):
         """Разобрать kind-тегированный plaintext; вернуть persist-кортеж или
@@ -296,6 +379,15 @@ class Session:
 
     async def close(self) -> None:
         self._running = False
+        if self._direct_task is not None:
+            self._direct_task.cancel()
+            self._direct_task = None
+        if self._direct is not None:
+            try:
+                await self._direct.close()
+            except Exception:
+                pass
+            self._direct = None
         if self._recv_task is not None:
             self._recv_task.cancel()
             try:
@@ -315,6 +407,8 @@ def open_session(
     seed_state,
     on_message: OnMessage | None = None,
     on_disconnect: Callable[[], None] | None = None,
+    on_signal: Callable[[str], None] | None = None,
+    on_direct_closed: Callable[[], None] | None = None,
 ) -> Session:
     """Собрать сессию, возобновив или посеяв ratchet (ветка реконнекта, §6).
 
@@ -332,5 +426,5 @@ def open_session(
         vault.ratchet.save_state(conversation_id, state)
     return Session(
         transport, state, transform_key, vault, conversation_id, on_message,
-        on_disconnect,
+        on_disconnect, on_signal, on_direct_closed,
     )

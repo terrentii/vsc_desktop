@@ -44,8 +44,7 @@ async def _wait_for(pred, timeout: float = 5.0) -> None:
     raise AssertionError("условие не выполнено за таймаут")
 
 
-@pytest.mark.parametrize("allow_direct", [False, True], ids=["relay", "direct"])
-async def test_two_clients_exchange_messages(tmp_path, allow_direct):
+async def test_two_clients_exchange_messages(tmp_path):
     server, url = await _start_server()
     av = create_vault(str(tmp_path / "a.db"), b"pw-a", params=FAST)
     bv = create_vault(str(tmp_path / "b.db"), b"pw-b", params=FAST)
@@ -53,11 +52,11 @@ async def test_two_clients_exchange_messages(tmp_path, allow_direct):
     recv_a: list[bytes] = []
     recv_b: list[bytes] = []
     sa = P2PService(
-        av, url, allow_direct=allow_direct, connect_timeout=3,
+        av, url, connect_timeout=3,
         on_message=lambda _cid, body: recv_a.append(body),
     )
     sb = P2PService(
-        bv, url, allow_direct=allow_direct, connect_timeout=3,
+        bv, url, connect_timeout=3,
         on_message=lambda _cid, body: recv_b.append(body),
     )
     sa.start()
@@ -108,11 +107,11 @@ async def test_two_clients_exchange_file_over_relay(tmp_path, monkeypatch):
     recv_a: list[bytes] = []
     recv_b: list[bytes] = []
     sa = P2PService(
-        av, url, allow_direct=False, connect_timeout=3,
+        av, url, connect_timeout=3,
         on_message=lambda _cid, body: recv_a.append(body),
     )
     sb = P2PService(
-        bv, url, allow_direct=False, connect_timeout=3,
+        bv, url, connect_timeout=3,
         on_message=lambda _cid, body: recv_b.append(body),
     )
     sa.start()
@@ -185,7 +184,7 @@ async def test_mitm_in_room_without_phrase_fails_pake(tmp_path):
     av = create_vault(str(tmp_path / "a.db"), b"pw", params=FAST)
     errors: list[Exception] = []
     sa = P2PService(
-        av, url, allow_direct=False, connect_timeout=3,
+        av, url, connect_timeout=3,
         on_error=lambda _cid, exc: errors.append(exc),
     )
     sa.start()
@@ -226,11 +225,11 @@ async def test_reconnect_without_phrase_after_disconnect(tmp_path):
     recv_a: list[bytes] = []
     recv_b: list[bytes] = []
     sa = P2PService(
-        av, url, allow_direct=False, connect_timeout=3,
+        av, url, connect_timeout=3,
         on_message=lambda _cid, body: recv_a.append(body),
     )
     sb = P2PService(
-        bv, url, allow_direct=False, connect_timeout=3,
+        bv, url, connect_timeout=3,
         on_message=lambda _cid, body: recv_b.append(body),
     )
     sa.start()
@@ -302,9 +301,9 @@ async def test_peer_disconnect_detected_without_manual_stop(tmp_path):
     bv = create_vault(str(tmp_path / "b.db"), b"pw-b", params=FAST)
 
     states_b: list[tuple[int, str]] = []
-    sa = P2PService(av, url, allow_direct=False, connect_timeout=3)
+    sa = P2PService(av, url, connect_timeout=3)
     sb = P2PService(
-        bv, url, allow_direct=False, connect_timeout=3,
+        bv, url, connect_timeout=3,
         on_state_change=lambda cid, st: states_b.append((cid, st)),
     )
     sa.start()

@@ -55,11 +55,11 @@ async def test_multimessage_bidirectional_dialog(tmp_path):
     recv_a: list[bytes] = []
     recv_b: list[bytes] = []
     sa = P2PService(
-        av, url, allow_direct=False, connect_timeout=3,
+        av, url, connect_timeout=3,
         on_message=lambda _cid, body: recv_a.append(body),
     )
     sb = P2PService(
-        bv, url, allow_direct=False, connect_timeout=3,
+        bv, url, connect_timeout=3,
         on_message=lambda _cid, body: recv_b.append(body),
     )
     sa.start()
@@ -173,11 +173,11 @@ async def test_service_level_reconnect_ratchet_continues(tmp_path):
     recv_b: list[bytes] = []
 
     sa = P2PService(
-        av, url, allow_direct=False, connect_timeout=3,
+        av, url, connect_timeout=3,
         on_message=lambda _cid, body: recv_a.append(body),
     )
     sb = P2PService(
-        bv, url, allow_direct=False, connect_timeout=3,
+        bv, url, connect_timeout=3,
         on_message=lambda _cid, body: recv_b.append(body),
     )
     sa.start()
@@ -222,7 +222,7 @@ async def test_service_level_reconnect_ratchet_continues(tmp_path):
         resp_vault_new = open_vault(resp_db, resp_pw)
         recv_resp_new: list[bytes] = []
         resp_new = P2PService(
-            resp_vault_new, url, allow_direct=False, connect_timeout=3,
+            resp_vault_new, url, connect_timeout=3,
             on_message=lambda _cid, body: recv_resp_new.append(body),
         )
         resp_new.start()
@@ -239,7 +239,7 @@ async def test_service_level_reconnect_ratchet_continues(tmp_path):
             await asyncio.to_thread(sa.stop)
             init_vault_new = open_vault(db_a, pw_a)
             init_new = P2PService(
-                init_vault_new, url, allow_direct=False, connect_timeout=3,
+                init_vault_new, url, connect_timeout=3,
                 on_message=lambda _cid, body: recv_init_new.append(body),
             )
             init_new.start()
@@ -251,7 +251,7 @@ async def test_service_level_reconnect_ratchet_continues(tmp_path):
             await asyncio.to_thread(sb.stop)
             init_vault_new = open_vault(db_b, pw_b)
             init_new = P2PService(
-                init_vault_new, url, allow_direct=False, connect_timeout=3,
+                init_vault_new, url, connect_timeout=3,
                 on_message=lambda _cid, body: recv_init_new.append(body),
             )
             init_new.start()
