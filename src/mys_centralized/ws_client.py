@@ -65,7 +65,8 @@ class WsClient:
             backoff = min(backoff * 2, self._max_backoff)
 
     async def _session(self) -> AsyncIterator[dict]:
-        async with self._connect(self.url, ping_interval=self._ping_interval) as ws:
+        # open_timeout: рукопожатие с загруженным сервером бывает 18–30 с.
+        async with self._connect(self.url, ping_interval=self._ping_interval, open_timeout=60) as ws:
             await ws.send(json.dumps({"type": "auth", "token": self._token}))
             hello = self._parse(await ws.recv())
             mtype = hello.get("type")
