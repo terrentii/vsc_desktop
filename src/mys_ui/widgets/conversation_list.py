@@ -1,5 +1,6 @@
 """Боковая панель: заголовок + счётчик, список диалогов, кнопка нового диалога."""
 
+from PySide6 import QtGui
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -50,6 +51,10 @@ class ConversationList(QWidget):
         self.list.setFont(theme.mono_font(21))
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._on_context_menu)
+        # длинные названия — «…», а не обрезка с горизонтальным скроллом
+        self.list.setTextElideMode(Qt.ElideRight)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.list.setWordWrap(False)
         layout.addWidget(self.list, 1)
 
         from mys_ui.widgets.brutal import BrutalButton
@@ -84,7 +89,10 @@ class ConversationList(QWidget):
         )
         self.list.clear()
         for c in conversations:
-            item = QListWidgetItem(c["title"] or f"Диалог {c['id']}")
+            title = c["title"] or f"Диалог {c['id']}"
+            item = QListWidgetItem(title)
+            # тултип рендерит HTML в режиме AutoText — название чужое, экранируем
+            item.setToolTip(QtGui.Qt.convertFromPlainText(title))
             item.setData(Qt.UserRole, c["id"])
             self.list.addItem(item)
             if c["id"] == self._selected_id:

@@ -38,3 +38,14 @@ def test_top_bar_and_banner_plain(qtbot):
     qtbot.addWidget(banner)
     banner.set_idle(note=HTML)
     assert banner._note.textFormat() == Qt.PlainText
+
+
+def test_conversation_tooltip_escapes_html(qtbot, tmp_path):
+    c = AppController(str(tmp_path / "v.db"), kdf_params=FAST)
+    c.create_vault(b"pw")
+    c.create_conversation(HTML)
+    w = MainWindow(c)
+    qtbot.addWidget(w)
+    tip = w.conversations.list.item(0).toolTip()
+    assert "<b>" not in tip and "&lt;b&gt;" in tip
+    c.lock()

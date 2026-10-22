@@ -85,7 +85,7 @@ class BrutalButton(QPushButton):
 
     def _pad(self) -> tuple[int, int]:
         if self._tiny:
-            return (1, 3)
+            return (1, 7 if self.text() else 3)  # текстовой tiny (тема) — воздух по бокам
         return (6, 14) if self._small else (8, 20)
 
     def sizeHint(self) -> QSize:

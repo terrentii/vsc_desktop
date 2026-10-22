@@ -55,6 +55,8 @@ DARK = {
     "bubbleThem": "#0d1936",
     "bubbleThemText": "#f3f3f1",
     "field": "#0d1936",       # inputs = --surface (как в канве)
+    "activeBg": "#4d7bff",    # активная комната (vsc_web dark: кобальт)
+    "activeEdge": "#f3f3f1",
 }
 
 LIGHT = {
@@ -79,6 +81,8 @@ LIGHT = {
     "bubbleThem": "#ffffff",
     "bubbleThemText": "#06112a",
     "field": "#ffffff",       # inputs = --surface
+    "activeBg": "#06112a",    # активная комната (vsc_web light: ink + кобальтовый край)
+    "activeEdge": "#0040ff",
 }
 
 THEMES = {"dark": DARK, "light": LIGHT}
@@ -265,10 +269,11 @@ QListWidget#ConvList::item {{
 QListWidget#ConvList::item:hover {{
     background: {t['surface3']};
 }}
+/* активная комната — как .room-item.active в vsc_web (dark: кобальт + белый) */
 QListWidget#ConvList::item:selected {{
-    background: {t['accentSoft']};
-    border-left: 3px solid {t['accent']};
-    color: {t['text']};
+    background: {t['activeBg']};
+    border-left: 3px solid {t['activeEdge']};
+    color: #ffffff;
 }}
 
 /* ---- чат ---- */
