@@ -50,7 +50,8 @@ class RendezvousClient:
         Таймаут ожидания пира ⇒ :class:`PeerUnavailable` (понятное сообщение в UI).
         """
         try:
-            ws = await connect(self._url)
+            # Рукопожатие с загруженным сервером бывает 18–30 с — дефолтные 10 с websockets мало.
+            ws = await connect(self._url, open_timeout=60)
         except (OSError, WebSocketException) as exc:
             raise RendezvousError("не удалось подключиться к rendezvous-серверу") from exc
 

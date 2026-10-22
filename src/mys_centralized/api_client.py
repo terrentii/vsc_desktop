@@ -19,7 +19,7 @@ class RestClient:
         *,
         client: httpx.AsyncClient | None = None,
         token: str | None = None,
-        timeout: float = 10.0,
+        timeout: float = 60.0,  # ответ загруженного сервера бывает 18–30 с
     ):
         self._base = base_url.rstrip("/")
         self._owns_client = client is None
