@@ -88,10 +88,15 @@ git push origin v0.1.0
 
 ```bash
 ./packaging/appimage/build-appimage.sh          # → dist/MYS_Desktop-x86_64.AppImage
+# NixOS (нужен steam-run; mksquashfs — из nixpkgs):
+nix shell nixpkgs#squashfsTools --command ./packaging/appimage/build-appimage.sh
 ```
 
-Самодостаточный файл: внутри изолированный Python, все зависимости и **bundled
-libsodium**. Пользователю: `chmod +x MYS_Desktop-x86_64.AppImage && ./MYS_Desktop-x86_64.AppImage`.
+Самодостаточный файл: внутри переносимый Python, все зависимости, **bundled
+libsodium**, libzstd и xcb-util (для X11), CA-сертификаты для `wss://`. Нужен
+glibc ≥ 2.35 (Ubuntu 22.04+, Debian 12+, Mint 21+, Fedora 36+). Пользователю:
+`chmod +x MYS_Desktop-x86_64.AppImage && ./MYS_Desktop-x86_64.AppImage`
+(на NixOS — через `appimage-run`/binfmt).
 
 ## Windows — установщик .exe
 
