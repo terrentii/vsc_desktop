@@ -26,6 +26,7 @@ class MessageInput(QWidget):
         rb.setContentsMargins(4, 0, 0, 0)
         rb.setSpacing(8)
         self._reply_label = QLabel("")
+        self._reply_label.setTextFormat(Qt.PlainText)  # цитата собеседника — не HTML
         self._reply_label.setObjectName("ReplyLabel")
         rb.addWidget(self._reply_label, 1)
         self._reply_close = QToolButton()

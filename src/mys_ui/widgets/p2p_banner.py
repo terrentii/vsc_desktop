@@ -62,6 +62,7 @@ class P2POfflineBanner(QWidget):
         root.addWidget(self._subtitle, 0, Qt.AlignHCenter)
 
         self._note = QLabel("")
+        self._note.setTextFormat(Qt.PlainText)
         self._note.setObjectName("P2PBannerNote")
         self._note.setAlignment(Qt.AlignCenter)
         self._note.hide()

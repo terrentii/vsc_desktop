@@ -190,6 +190,7 @@ class MainWindow(QWidget):
         col = QVBoxLayout()
         col.setSpacing(4)
         self._chat_name = QLabel("")
+        self._chat_name.setTextFormat(Qt.PlainText)  # название комнаты — чужой текст
         self._chat_name.setObjectName("ChatName")
         self._chat_sub = QLabel("")
         self._chat_sub.setObjectName("ChatSub")

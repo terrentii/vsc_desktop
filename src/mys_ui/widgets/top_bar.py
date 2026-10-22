@@ -31,6 +31,7 @@ class TopBar(QWidget):
 
         # чипы статуса
         self.chip = QLabel("")
+        self.chip.setTextFormat(Qt.PlainText)
         self.chip.setObjectName("Chip")
         self.chip.hide()
         self.btn_login = BrutalButton("Войти в Центр", "primary", small=True)
