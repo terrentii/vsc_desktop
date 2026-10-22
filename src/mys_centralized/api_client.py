@@ -112,30 +112,34 @@ class RestClient:
         resp = await self._request("GET", "/api/rooms")
         data = self._json(resp)
         try:
-            return [
-                Room(
-                    id=int(r["id"]),
-                    name=r.get("name"),
-                    is_direct=bool(r.get("is_direct", False)),
-                    updated_at=r.get("updated_at"),
-                )
-                for r in data["rooms"]
-            ]
+            return [self._room_from(r) for r in data["rooms"]]
         except (KeyError, TypeError, ValueError) as exc:
             raise ProtocolError("malformed rooms response") from exc
 
     async def create_room(self, name: str) -> Room:
         resp = await self._request("POST", "/api/rooms", json={"name": name})
-        data = self._json(resp)
+        return self._parse_room(resp)
+
+    async def join_room(self, code: str) -> Room:
+        """Войти в комнату по 10-значному коду (открытая — станешь участником)."""
+        resp = await self._request("POST", "/api/rooms/join", json={"code": code})
+        return self._parse_room(resp)
+
+    def _parse_room(self, resp) -> Room:
         try:
-            return Room(
-                id=int(data["id"]),
-                name=data.get("name"),
-                is_direct=bool(data.get("is_direct", False)),
-                updated_at=data.get("updated_at"),
-            )
+            return self._room_from(self._json(resp))
         except (KeyError, TypeError, ValueError) as exc:
             raise ProtocolError("malformed room response") from exc
+
+    @staticmethod
+    def _room_from(r: dict) -> Room:
+        return Room(
+            id=int(r["id"]),
+            name=r.get("name"),
+            is_direct=bool(r.get("is_direct", False)),
+            updated_at=r.get("updated_at"),
+            code=r.get("code"),
+        )
 
     async def get_messages(
         self, room_id: int, *, after: int | None = None, limit: int | None = None

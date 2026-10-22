@@ -40,6 +40,10 @@ def _cursor_key(server_room_id: int) -> str:
     return f"central.cursor.{int(server_room_id)}"
 
 
+def _code_key(server_room_id: int) -> str:
+    return f"central.code.{int(server_room_id)}"
+
+
 class SyncEngine:
     def __init__(self, vault, rest, *, on_message=None, page_limit: int = 200,
                  own_username: str | None = None):
@@ -72,11 +76,25 @@ class SyncEngine:
     async def sync_rooms(self) -> dict[int, int]:
         """Загрузить список комнат, upsert в conversations. Возвращает {room_id: conv_id}."""
         rooms = await self._rest.list_rooms()
-        return {r.id: self._conv_for_room(r.id, name=r.name) for r in rooms}
+        return {r.id: self._conv_for_room_obj(r) for r in rooms}
 
     async def create_room(self, name: str) -> int:
         """Создать комнату на сервере и завести/найти локальную беседу. → conv_id."""
         room = await self._rest.create_room(name)
+        return self._conv_for_room_obj(room)
+
+    async def join_room(self, code: str) -> int:
+        """Войти в комнату по коду и завести/найти локальную беседу. → conv_id."""
+        return self._conv_for_room_obj(await self._rest.join_room(code))
+
+    def room_code(self, conv_id) -> str | None:
+        """10-значный код комнаты беседы (None — сервер его ещё не прислал)."""
+        raw = self._vault.settings.get(_code_key(self._server_room_of(conv_id)))
+        return raw.decode("utf-8") if isinstance(raw, bytes) else raw
+
+    def _conv_for_room_obj(self, room) -> int:
+        if room.code:
+            self._vault.settings.set(_code_key(room.id), room.code.encode("utf-8"))
         return self._conv_for_room(room.id, name=room.name)
 
     async def sync_history(self, server_room_id: int):

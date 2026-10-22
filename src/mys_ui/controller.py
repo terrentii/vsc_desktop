@@ -7,6 +7,7 @@
 
 import os
 
+from mys_centralized.errors import CentralizedError
 from mys_storage import create_vault, open_vault
 from mys_storage.vault import Vault
 
@@ -91,6 +92,18 @@ class AppController:
         ):
             return self._central.create_room(title)
         return self.vault.conversations.add(mode=self.mode, title=title)
+
+    def join_room(self, code: str) -> int:
+        """«Центр»: войти в комнату по 10-значному коду → conv_id."""
+        if self._central is None or self._central.session is None:
+            raise CentralizedError("нет активной сессии «Центра»")
+        return self._central.join_room(code)
+
+    def room_code(self, conversation_id: int) -> str | None:
+        """Код комнаты «Центра» для показа/передачи (None — неизвестен)."""
+        if self._central is None:
+            return None
+        return self._central.room_code(conversation_id)
 
     def list_messages(self, conversation_id: int) -> list[dict]:
         return self.vault.messages.list(conversation_id)

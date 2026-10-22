@@ -14,12 +14,9 @@ venv-интерпретатором, своя tmp-БД, свободный по�
   сервиса через ``run_coroutine_threadsafe().result()``). Реальный сервер живёт в
   **отдельном процессе**, а не на event loop теста, поэтому тесты — обычные
   синхронные функции (без ``asyncio.to_thread``-плясок из юнит-тестов сервиса).
-* Сервер подписывает WS-соединение на комнаты пользователя **в момент авторизации**
-  (``ws_centralized._rooms_for``). Поэтому для real-time доставки между двумя
-  аккаунтами B должен стать ``RoomMember`` комнаты A **до** подключения B. Вступление
-  в комнату из десктопа в v1 не реализовано (follow-up №6), поэтому членство
-  инъектируется прямой записью в серверную SQLite — это документированный для v1
-  обходной путь.
+* Второй аккаунт входит в комнату по коду (``POST /api/rooms/join``) уже после
+  подключения своего ``/ws`` — сервер подписывает соединение на комнату сразу,
+  live-доставка проверяет и это.
 """
 
 from __future__ import annotations
@@ -27,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import os
 import socket
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -35,7 +31,6 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -147,31 +142,6 @@ def live_vsc_web():
         log.close()
 
 
-def _inject_room_member(db_path: str, room_name: str, login: str) -> str:
-    """Сделать ``login`` участником комнаты по имени напрямую в серверной SQLite.
-
-    Возвращает строковый ``room_id`` комнаты. Обходной путь для v1: вступление в
-    чужую комнату из десктопа не реализовано (см. модульный docstring).
-    """
-    conn = sqlite3.connect(db_path, timeout=10.0)
-    try:
-        row = conn.execute(
-            "SELECT room_id FROM rooms WHERE name=? ORDER BY id DESC LIMIT 1",
-            (room_name,),
-        ).fetchone()
-        assert row is not None, f"комната {room_name!r} не найдена на сервере"
-        room_id = row[0]
-        now = datetime.now(timezone.utc).isoformat()
-        conn.execute(
-            "INSERT INTO room_members(room_id, login, joined_at, role) VALUES(?,?,?,?)",
-            (room_id, login, now, "member"),
-        )
-        conn.commit()
-        return room_id
-    finally:
-        conn.close()
-
-
 def _make_service(tmp_path, name: str, *, on_message=None, on_state_change=None):
     vault = create_vault(str(tmp_path / f"{name}.db"), f"pw-{name}".encode(), params=FAST)
     svc = CentralizedService(
@@ -250,16 +220,13 @@ def test_central_realtime_delivery_two_accounts(live_vsc_web, tmp_path):
     try:
         svc_a.login(live_vsc_web.url, user_a, "pw-a-secret", register=True)
         conv_a = svc_a.create_room(room_name)
+        code = svc_a.room_code(conv_a)
+        assert code and len(code) == 10
 
-        # B становится участником комнаты A ДО подключения B (иначе /ws не подпишет).
-        _inject_room_member(live_vsc_web.db_path, room_name, user_b)
-
-        # B входит: sync_all увидит комнату (B уже участник) → /ws подпишется на неё.
+        # B подключается (его /ws уже живой), и только потом входит по коду.
         svc_b.login(live_vsc_web.url, user_b, "pw-b-secret", register=True)
-        # Дожидаемся "connected": после WS-ready клиент повторно синкается, а сервер
-        # к этому моменту уже подписал соединение B на комнату.
         _wait(lambda: "connected" in b_states, timeout=15.0)
-        time.sleep(0.3)  # запас на серверную подписку после отправки ready
+        conv_b_joined = svc_b.join_room(code)
 
         # A отправляет — у B нет иного источника этого сообщения, кроме WS-push
         # (первичный синк B уже отработал до отправки).
@@ -267,6 +234,7 @@ def test_central_realtime_delivery_two_accounts(live_vsc_web, tmp_path):
 
         _wait(lambda: len(b_messages) >= 1, timeout=15.0)
         conv_b, local_b = b_messages[0]
+        assert conv_b == conv_b_joined
         rows = vb.messages.list(conv_b)
         delivered = [r["body"] for r in rows if r["direction"] == "in"]
         assert "пинг от A".encode("utf-8") in delivered, (

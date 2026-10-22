@@ -27,6 +27,7 @@ class FakeCentral:
         self.started = False
         self.logged_out = False
         self._next_room = 2  # login занимает room_id=b"1"
+        self.codes = {}
         self.fetch_bytes = b"fetched-image-bytes"
 
     def start(self):
@@ -86,6 +87,17 @@ class FakeCentral:
         return self.vault.conversations.add(
             mode="centralized", room_id=rid, title=name
         )
+
+    def join_room(self, code):
+        if code != "1234567890":
+            from mys_centralized import ServerError
+            raise ServerError("not_found")
+        conv = self.vault.conversations.add(mode="centralized", room_id=b"77", title="чужая")
+        self.codes[conv] = code
+        return conv
+
+    def room_code(self, conversation_id):
+        return getattr(self, "codes", {}).get(conversation_id)
 
     def send_message(self, conversation_id, body, *, reply=None, wait=True):
         lid = self.vault.messages.add(
@@ -389,4 +401,35 @@ def test_settings_logout_keeps_history_by_default(qtbot, tmp_path):
 
     assert c.central_session() is None
     assert len(c.list_conversations()) == 1  # история осталась для офлайн-чтения
+    c.lock()
+
+
+def test_join_by_code_button_only_in_central_mode(qtbot, tmp_path):
+    c, _holder = _ready(tmp_path)
+    w = MainWindow(c)
+    qtbot.addWidget(w)
+    w.show()
+    assert w.conversations.btn_join.isHidden()  # стартовый режим — P2P
+    c.set_mode(CENTRALIZED)
+    w._sync_mode_ui()
+    assert not w.conversations.btn_join.isHidden()
+    c.lock()
+
+
+def test_join_by_code_adds_room_and_shows_code(qtbot, tmp_path, monkeypatch):
+    c, _holder = _ready(tmp_path)
+    w = MainWindow(c)
+    qtbot.addWidget(w)
+    c.set_mode(CENTRALIZED)
+    w._perform_central_login("https://soufos.ru", "alice", "pw", False)
+    warned = []
+    monkeypatch.setattr("mys_ui.dialogs.common.warn", lambda *a, **k: warned.append(a))
+
+    w.join_by_code("0000000000")  # нет такой комнаты — предупреждение, без падения
+    assert warned and "не найдена" in warned[0][2]
+
+    w.join_by_code(" 1234567890 ")
+    conv = next(x for x in c.list_conversations() if x["title"] == "чужая")
+    assert w._current == conv["id"]
+    assert "1234567890" in w._chat_sub.text()
     c.lock()
