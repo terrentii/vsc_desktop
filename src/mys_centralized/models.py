@@ -23,6 +23,7 @@ class Room:
     name: str | None = None
     is_direct: bool = False
     updated_at: str | None = None
+    code: str | None = None  # 10-значный код комнаты — им делятся для входа
 
 
 @dataclass

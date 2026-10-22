@@ -19,6 +19,7 @@ from mys_ui.controller import DECENTRALIZED
 class ConversationList(QWidget):
     conversation_selected = Signal(int)
     new_conversation_requested = Signal()
+    join_requested = Signal()  # «Центр»: войти в комнату по коду
     conversation_delete_requested = Signal(int)
     conversation_rename_requested = Signal(int)
 
@@ -65,10 +66,14 @@ class ConversationList(QWidget):
         # DS create-btn: чернильное лицо + кобальтовая тень
         self.btn_new = BrutalButton("+ Новый диалог", "ink", shadow="accent")
         wl.addWidget(self.btn_new)
+        self.btn_join = BrutalButton("Войти по коду", "default")
+        self.btn_join.hide()  # только в режиме «Центр» (см. set_mode)
+        wl.addWidget(self.btn_join)
         layout.addWidget(wrap)
 
         self.list.itemClicked.connect(self._on_item)
         self.btn_new.clicked.connect(self.new_conversation_requested)
+        self.btn_join.clicked.connect(self.join_requested)
 
     def set_mode(self, mode: str) -> None:
         if mode != self._mode:
@@ -78,6 +83,7 @@ class ConversationList(QWidget):
         self.btn_new.setText(
             "+ НОВЫЙ КАНАЛ" if mode == DECENTRALIZED else "+ НОВАЯ КОМНАТА"
         )
+        self.btn_join.setVisible(mode != DECENTRALIZED)
 
     def populate(self, conversations: list[dict]) -> None:
         # populate дёргается на каждом событии синка — подсветка выбранной

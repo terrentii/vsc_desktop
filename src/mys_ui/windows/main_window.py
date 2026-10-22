@@ -120,6 +120,7 @@ class MainWindow(QWidget):
         self.top.login_requested.connect(self._central_login)
         self.conversations.conversation_selected.connect(self._on_select)
         self.conversations.new_conversation_requested.connect(self._on_new)
+        self.conversations.join_requested.connect(self._on_join)
         self.conversations.conversation_delete_requested.connect(self._on_delete_conversation)
         self.conversations.conversation_rename_requested.connect(self._on_rename_conversation)
         self.input.message_submitted.connect(self._on_send)
@@ -194,6 +195,7 @@ class MainWindow(QWidget):
         self._chat_name.setObjectName("ChatName")
         self._chat_sub = QLabel("")
         self._chat_sub.setObjectName("ChatSub")
+        self._chat_sub.setTextInteractionFlags(Qt.TextSelectableByMouse)  # код комнаты — скопировать
         self._chat_online = QLabel("")  # только P2P: «● В СЕТИ» / «● НЕ В СЕТИ»
         self._chat_online.setObjectName("ChatOnline")
         self._chat_online.hide()
@@ -423,6 +425,31 @@ class MainWindow(QWidget):
                 self.add_conversation(title)
                 self._set_status("Комната создана")
 
+    def _on_join(self) -> None:
+        code, ok = common.ask_text(self, "Вход в комнату", "КОД КОМНАТЫ (10 ЦИФР)")
+        if ok:
+            self.join_by_code(code)
+
+    _JOIN_ERRORS = {
+        "bad_request": "Код комнаты — ровно 10 цифр.",
+        "not_found": "Комната с таким кодом не найдена.",
+        "forbidden": "Нет доступа: комната закрыта или личная.",
+    }
+
+    def join_by_code(self, code: str) -> None:
+        code = code.strip()
+        if not (code.isdigit() and len(code) == 10):
+            common.warn(self, "Вход в комнату", self._JOIN_ERRORS["bad_request"])
+            return
+        try:
+            conv = self._c.join_room(code)
+        except CentralizedError as exc:
+            common.warn(self, "Вход в комнату", self._JOIN_ERRORS.get(str(exc), f"Не удалось войти: {exc}"))
+            return
+        self.refresh_conversations()
+        self._on_select(conv)
+        self._set_status("Вы в комнате")
+
     def _on_send(self, text: str) -> None:
         if self._current is None:
             return
@@ -549,7 +576,8 @@ class MainWindow(QWidget):
             self._chat_badge.setText("E2E · RATCHET")
             self._update_p2p_online_label()
         else:
-            self._chat_sub.setText(f"ROOM {room}" if room else "ЦЕНТР")
+            code = self._c.room_code(self._current)
+            self._chat_sub.setText(f"КОД {code}" if code else "ЦЕНТР")
             self._chat_badge.setText("soufos.ru")
             self._chat_online.hide()
         self._chat_header.show()

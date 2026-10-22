@@ -178,6 +178,14 @@ class CentralizedService:
         """Создать комнату на сервере → локальная беседа. Возвращает conv_id."""
         return self._submit(self._create_room(name), timeout=timeout)
 
+    def join_room(self, code: str, *, timeout: float = 15.0) -> int:
+        """Войти в комнату по коду → локальная беседа. Возвращает conv_id."""
+        return self._submit(self._join_room(code), timeout=timeout)
+
+    def room_code(self, conversation_id: int) -> str | None:
+        """Код комнаты беседы (чтение vault — без event loop)."""
+        return self._sync.room_code(conversation_id) if self._sync is not None else None
+
     def send_message(
         self, conversation_id: int, body: str, *,
         reply: dict | None = None, timeout: float = 15.0, wait: bool = True,
@@ -356,6 +364,11 @@ class CentralizedService:
         if self._sync is None:
             raise RuntimeError("нет активной сессии")
         return await self._sync.create_room(name)
+
+    async def _join_room(self, code) -> int:
+        if self._sync is None:
+            raise RuntimeError("нет активной сессии")
+        return await self._sync.join_room(code)
 
     async def _send(self, conversation_id, body, reply=None) -> int:
         if self._sync is None:

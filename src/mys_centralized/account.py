@@ -18,6 +18,7 @@ K_WIPE = "central.wipe_on_logout"
 # Беседы централизованного режима (см. sync.MODE) и префикс ключей-курсоров.
 _MODE = "centralized"
 _CURSOR_PREFIX = "central.cursor."
+_CODE_PREFIX = "central.code."
 
 
 def _dec(v):
@@ -69,3 +70,4 @@ def wipe_local_cache(vault) -> None:
         vault.messages.delete_for_conversation(conv["id"])
         vault.conversations.delete(conv["id"])
     vault.settings.delete_prefix(_CURSOR_PREFIX)
+    vault.settings.delete_prefix(_CODE_PREFIX)
