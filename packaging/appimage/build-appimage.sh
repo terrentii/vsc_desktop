@@ -63,8 +63,8 @@ PY="$APPDIR/usr/python/bin/python3"
 # --- приложение и зависимости ----------------------------------------------
 c_info "Ставлю приложение и зависимости…"
 "${RUN[@]}" "$PY" -m pip install --quiet --disable-pip-version-check \
-    --no-warn-script-location "$REPO_ROOT"
-"${RUN[@]}" "$PY" -c "import PySide6.QtWidgets, sqlcipher3, cryptography, argon2, httpx, websockets, mys_ui" \
+    --no-warn-script-location "$REPO_ROOT[webrtc]"  # [webrtc] — прямой канал P2P (aiortc)
+"${RUN[@]}" "$PY" -c "import PySide6.QtWidgets, sqlcipher3, cryptography, argon2, httpx, websockets, aiortc, mys_ui" \
     || die "зависимости не импортируются"
 
 # --- облегчение: приложению нужны только QtCore/QtGui/QtWidgets --------------
@@ -137,6 +137,7 @@ import PySide6.QtWidgets, mys_ui.app
 from mys_crypto import pake
 a, ya = pake.cpace_msg(b'prs', b'sid'); b, yb = pake.cpace_msg(b'prs', b'sid')
 assert pake.cpace_finish(a, yb) == pake.cpace_finish(b, ya)
+from mys_decentralized.webrtc import WebRtcLink  # прямой канал P2P (aiortc) после чистки
 " || die "самопроверка AppDir не прошла"
 c_ok "самопроверка AppDir"
 
