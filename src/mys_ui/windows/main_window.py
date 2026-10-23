@@ -383,6 +383,14 @@ class MainWindow(QWidget):
                 return row.get("title") or f"Диалог {row['id']}"
         return "Собеседник"
 
+    def _incoming_label(self, conversation_id: int) -> str:
+        """Автор входящих без имени отправителя: название, если беседу
+        переименовали, иначе «Собеседник» (как на телефоне), а не «Диалог N»."""
+        for row in self._c.list_conversations():
+            if row["id"] == conversation_id:
+                return row.get("title") or "Собеседник"
+        return "Собеседник"
+
     def _show_messages(self, conversation_id: int) -> None:
         rows = self._c.list_messages(conversation_id)
         own_label, own_sender = "я", None
@@ -393,7 +401,7 @@ class MainWindow(QWidget):
                 # нашим логином — рисуем и управляем ими как своими.
                 own_label = own_sender = sess.username
         self.chat.show_messages(
-            rows, peer_label=self._peer_label(conversation_id),
+            rows, peer_label=self._incoming_label(conversation_id),
             own_label=own_label, own_sender=own_sender,
         )
         # Автозагрузка картинок при открытии беседы (паритет с вебом — там это
@@ -486,7 +494,7 @@ class MainWindow(QWidget):
         if row["direction"] == "out":
             sess = self._c.central_session()
             return sess.username if sess is not None else "я"
-        return self._peer_label(row["conversation_id"])
+        return self._incoming_label(row["conversation_id"])
 
     @staticmethod
     def _row_snippet(row: dict) -> str:
