@@ -11,7 +11,7 @@ Wayland, где ручное двигание геометрии недосту�
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, Qt, Signal
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -319,3 +319,15 @@ class FramelessDialog(QDialog):
         self.body_layout = QVBoxLayout(self.body)
         self.body_layout.setContentsMargins(28, 24, 28, 24)
         self.body_layout.setSpacing(8)
+
+    def showEvent(self, e):
+        # Мягкое проявление диалога (без композитора прозрачность просто игнорируется)
+        self.setWindowOpacity(0.0)
+        anim = QPropertyAnimation(self, b"windowOpacity", self)
+        anim.setDuration(150)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._fade = anim
+        anim.start()
+        super().showEvent(e)

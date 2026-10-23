@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 from mys_centralized.errors import CentralizedError
 from mys_decentralized import filetransfer
 
-from mys_ui import prefs, theme
+from mys_ui import motion, prefs, theme
 from mys_ui.controller import CENTRALIZED, DECENTRALIZED
 from mys_ui.dialogs import common
 from mys_ui.dialogs.central import CentralLoginDialog
@@ -188,7 +188,9 @@ class MainWindow(QWidget):
         self._chat_header = QWidget()
         self._chat_header.setObjectName("ChatHeader")
         hh = QHBoxLayout(self._chat_header)
-        hh.setContentsMargins(20, 14, 20, 14)
+        hh.setContentsMargins(20, 10, 20, 10)
+        # одна высота с шапкой списка бесед: нижние линии двух колонок совпадают
+        self._chat_header.setFixedHeight(theme.HEADER_H)
         col = QVBoxLayout()
         col.setSpacing(4)
         self._chat_name = QLabel("")
@@ -201,12 +203,16 @@ class MainWindow(QWidget):
         self._chat_online.setObjectName("ChatOnline")
         self._chat_online.hide()
         col.addWidget(self._chat_name)
-        col.addWidget(self._chat_sub)
-        col.addWidget(self._chat_online)
+        sub = QHBoxLayout()  # статус P2P — в строке подзаголовка, шапка не растёт
+        sub.setSpacing(14)
+        sub.addWidget(self._chat_sub)
+        sub.addWidget(self._chat_online)
+        sub.addStretch()
+        col.addLayout(sub)
         hh.addLayout(col, 1)
         self._chat_badge = QLabel("")
         self._chat_badge.setObjectName("ChatBadge")
-        hh.addWidget(self._chat_badge, 0, Qt.AlignTop)
+        hh.addWidget(self._chat_badge, 0, Qt.AlignVCenter)
         v.addWidget(self._chat_header)
 
         # переключатель «пусто / чат»
@@ -416,6 +422,7 @@ class MainWindow(QWidget):
     def _on_select(self, conversation_id: int) -> None:
         if self._current != conversation_id:
             self.input.clear_reply()  # «ответ на…» не переносится между беседами
+            motion.fade_in(self.chat, 160)
         self._current = conversation_id
         # Плашка «собеседник офлайн» должна появляться заново при каждом входе
         # в беседу — сбрасываем дисмисс прошлого визита (см. P2POfflineBanner).

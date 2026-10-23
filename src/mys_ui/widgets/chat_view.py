@@ -28,8 +28,10 @@ import datetime as _dt
 import re
 import time
 
-from PySide6.QtCore import QEvent, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPixmap, QPen
+from PySide6.QtCore import QEasingCurve, QEvent, QRect, QSize, Qt, QTimer, QVariantAnimation, Signal
+from PySide6.QtGui import (
+    QColor, QFont, QFontMetrics, QGuiApplication, QLinearGradient, QPainter, QPen, QPixmap,
+)
 from PySide6.QtWidgets import (
     QFileDialog,
     QListWidget,
@@ -38,7 +40,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
 )
 
-from mys_ui import theme
+from mys_ui import motion, theme
 
 _DIRECTION_ROLE = Qt.UserRole + 1
 _TIME_ROLE = Qt.UserRole + 2
@@ -475,6 +477,43 @@ def _display_text(m: dict) -> str:
     return m["body"].decode("utf-8", "replace") if m["body"] is not None else ""
 
 
+_GRID = 12          # шаг миллиметровки «Чертёж», px
+_MAJOR_EVERY = 5    # жирная линия каждые 5 клеток
+_SCAN_MS = 20_000   # полный проход развёртки сверху вниз
+_SCAN_BAND = 0.12   # полувысота полосы развёртки, доля высоты
+
+
+def _paint_blueprint(p: QPainter, w: int, h: int, scan: float, accent: str) -> None:
+    """Фон «Чертёж» (как в мобильном клиенте): ГОСТ-миллиметровка и медленная
+    кобальтовая развёртка. Текст журнала лежит прямо на фоне, поэтому тише, чем на телефоне."""
+    base = QColor(accent)
+
+    def pen(alpha: float) -> QPen:
+        c = QColor(base)
+        c.setAlphaF(alpha)
+        return QPen(c, 1)
+
+    band = h * _SCAN_BAND
+    at = scan * (h + 2 * band) - band
+    for major in (False, True):
+        p.setPen(pen(0.08 if major else 0.04))
+        for i, x in enumerate(range(0, w + 1, _GRID)):
+            if (i % _MAJOR_EVERY == 0) == major:
+                p.drawLine(x, 0, x, h)
+        for i, y in enumerate(range(0, h + 1, _GRID)):
+            if (i % _MAJOR_EVERY == 0) == major:
+                p.drawLine(0, y, w, y)
+    g = QLinearGradient(0, at - band, 0, at + band)
+    glow = QColor(base)
+    glow.setAlphaF(0.06)
+    clear = QColor(base)
+    clear.setAlphaF(0.0)
+    g.setColorAt(0.0, clear)
+    g.setColorAt(0.5, glow)
+    g.setColorAt(1.0, clear)
+    p.fillRect(0, int(at - band), w, int(2 * band), g)
+
+
 class ChatView(QListWidget):
     media_fetch_requested = Signal(int)  # message id — тело ещё не докачано
     reply_requested = Signal(int)        # local message id — «Ответить»
@@ -500,6 +539,41 @@ class ChatView(QListWidget):
         self.itemDoubleClicked.connect(self._on_double_click)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._on_context_menu)
+        # Развёртка фона: перерисовывается только полоса, а не весь журнал.
+        self._scan = 0.0
+        self._scan_anim = QVariantAnimation(self)
+        self._scan_anim.setStartValue(0.0)
+        self._scan_anim.setEndValue(1.0)
+        self._scan_anim.setDuration(_SCAN_MS)
+        self._scan_anim.setLoopCount(-1)
+        self._scan_anim.setEasingCurve(QEasingCurve.Linear)
+        self._scan_anim.valueChanged.connect(self._on_scan)
+
+    def _band_rect(self, scan: float) -> QRect:
+        h = self.viewport().height()
+        band = h * _SCAN_BAND
+        at = scan * (h + 2 * band) - band
+        return QRect(0, int(at - band) - 2, self.viewport().width(), int(2 * band) + 4)
+
+    def _on_scan(self, v) -> None:
+        old = self._band_rect(self._scan)
+        self._scan = float(v)
+        self.viewport().update(old.united(self._band_rect(self._scan)))
+
+    def showEvent(self, e) -> None:
+        self._scan_anim.start()
+        super().showEvent(e)
+
+    def hideEvent(self, e) -> None:
+        self._scan_anim.stop()  # невидимый чат не тратит CPU
+        super().hideEvent(e)
+
+    def paintEvent(self, e) -> None:
+        p = QPainter(self.viewport())
+        p.setClipRegion(e.region())
+        _paint_blueprint(p, self.viewport().width(), self.viewport().height(), self._scan, theme.tokens()["accent"])
+        p.end()
+        super().paintEvent(e)
 
     def show_messages(
         self, messages: list[dict], *,
@@ -509,6 +583,10 @@ class ChatView(QListWidget):
         """``own_sender`` — логин аккаунта «Центра»: входящие с этим отправителем
         (собственные сообщения, отправленные из веба) рисуются как свои —
         с кобальтовым именем и кнопками ИЗМЕНИТЬ/УДАЛИТЬ."""
+        # Пришло новое сообщение, а мы были внизу — доезжаем плавно, а не прыжком.
+        sb = self.verticalScrollBar()
+        grew = 0 < self.count() < len(messages) and sb.value() >= sb.maximum() - 4
+        prev = sb.value()
         self.clear()
         for m in messages:
             own = m["direction"] == "out" or (
@@ -533,7 +611,11 @@ class ChatView(QListWidget):
                 item.setData(_FILE_BODY_ROLE, m["body"])
                 item.setData(_FILENAME_ROLE, m.get("filename"))
             self.addItem(item)
-        self.scrollToBottom()
+        if grew:
+            sb.setValue(prev)
+            QTimer.singleShot(0, lambda: motion.smooth_scroll(sb, sb.maximum()))
+        else:
+            self.scrollToBottom()
 
     def mouseMoveEvent(self, event) -> None:
         row = self.indexAt(event.position().toPoint()).row()

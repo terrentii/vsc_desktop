@@ -36,6 +36,7 @@ class ConversationList(QWidget):
 
         header = QWidget()
         header.setObjectName("SidebarHeader")
+        header.setFixedHeight(theme.HEADER_H)  # вровень с шапкой чата
         h = QHBoxLayout(header)
         h.setContentsMargins(16, 12, 16, 12)
         self.title = QLabel("ДИАЛОГИ")
