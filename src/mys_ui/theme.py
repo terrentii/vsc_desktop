@@ -89,6 +89,9 @@ THEMES = {"dark": DARK, "light": LIGHT}
 
 FONT_UI = "'GOST type B', 'GOST 2.304 type A', sans-serif"
 FONT_MONO = "'GOST type B', 'GOST 2.304 type A', monospace"
+
+# Высота шапок колонок (список бесед и чат) — их нижние линии на одном уровне.
+HEADER_H = 80
 FONT_DISPLAY = "'GOST type B', 'GOST 2.304 type A', sans-serif"
 
 _current = "dark"
@@ -371,7 +374,15 @@ QLineEdit {{
 }}
 /* фокус: граница остаётся ink — кобальтовую смещённую тень даёт BrutalLineEdit */
 QLineEdit:focus {{ border: 1px solid {t['line']}; }}
-QLineEdit#MsgField {{ font-size: 21px; }}
+/* BrutalLineEdit: 2px рамка как у кнопок, справа/снизу — место под блочную тень,
+   высоту задаёт CONTROL_H (текст центрируется сам) */
+QLineEdit[brutal="true"] {{
+    border: 2px solid {t['line']};
+    margin: 0 4px 4px 0;
+    padding: 0 14px;
+}}
+QLineEdit[brutal="true"]:focus {{ border: 2px solid {t['line']}; }}
+QLineEdit#MsgField {{ font-size: 20px; }}
 QLabel#ReplyLabel {{
     color: {t['text3']};
     font-family: {FONT_MONO};
@@ -532,6 +543,9 @@ def _apply_palette(app, t: dict) -> None:
     p.setColor(QPalette.ToolTipBase, QColor(t["surface"]))
     p.setColor(QPalette.ToolTipText, QColor(t["text"]))
     p.setColor(QPalette.PlaceholderText, QColor(t["text3"]))
+    # ссылки в rich-text (QSS их не красит): кобальт темы, а не системный синий
+    p.setColor(QPalette.Link, QColor(t["accent"]))
+    p.setColor(QPalette.LinkVisited, QColor(t["accent"]))
     app.setPalette(p)
 
 

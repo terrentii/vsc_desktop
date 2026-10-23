@@ -3,19 +3,18 @@
 Сигнатура DS — жёсткие смещённые тени, которые «вдавливаются» при нажатии
 (сдвиг 2px → тень 2px → 0, «клац»), квадратные углы, ink-границы и единый
 кобальтовый акцент. QSS не умеет ни ``box-shadow``, ни анимацию состояний, поэтому
-кнопка и чекбокс рисуются вручную; поле ввода зажигает кобальтовую тень на фокусе
-реальным ``QGraphicsDropShadowEffect`` (нулевой радиус = чёткое смещение).
+кнопка и чекбокс рисуются вручную; поле ввода рисует ту же блочную тень в своём
+QSS-отступе и плавно зажигает её кобальтом на фокусе. Нажатие/наведение анимированы.
 
 Spec: preview/components-buttons.html, components-inputs.html, spacing-shadows.html.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, QSize, Qt
+from PySide6.QtCore import QEasingCurve, QRect, QSize, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
-    QGraphicsDropShadowEffect,
     QLineEdit,
     QPushButton,
 )
@@ -26,6 +25,30 @@ from mys_ui import theme
 # primary — кобальт; ink — чернильная заливка; danger — warn; default — surface;
 # minimal — без тени, hairline-граница, ховер = инверсия (для модалок/тулбаров).
 _BRUTAL = ("primary", "default", "ink", "danger")
+
+# Общая высота обычных кнопок и полей ввода (вместе с 4px тенью): всё в одной
+# строке встаёт ровно, правые края кнопок и полей в колонке совпадают.
+CONTROL_H = 48
+_SHADOW = 4
+_PRESS_MS = 90
+_GLOW_MS = 160
+
+
+def _anim(owner, ms: int, on_value) -> QVariantAnimation:
+    a = QVariantAnimation(owner)
+    a.setDuration(ms)
+    a.setEasingCurve(QEasingCurve.OutCubic)
+    a.valueChanged.connect(on_value)
+    return a
+
+
+def _mix(a: str, b: str, k: float) -> QColor:
+    ca, cb = QColor(a), QColor(b)
+    return QColor(
+        round(ca.red() + (cb.red() - ca.red()) * k),
+        round(ca.green() + (cb.green() - ca.green()) * k),
+        round(ca.blue() + (cb.blue() - ca.blue()) * k),
+    )
 
 
 class BrutalButton(QPushButton):
@@ -55,6 +78,9 @@ class BrutalButton(QPushButton):
         self._ring = ring
         self._hover = False
         self._pressed = False
+        # смещение лица к тени — анимируется, а не прыгает (наведение — полшага, нажатие — до конца)
+        self._fd = 0.0
+        self._fd_anim = _anim(self, _PRESS_MS, self._set_fd)
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.TabFocus)
         self.setAttribute(Qt.WA_Hover, True)
@@ -94,6 +120,8 @@ class BrutalButton(QPushButton):
         extra = 0 if self._tiny else 4  # дополнительный «воздух» — не для tiny
         h = fm.height() + 2 * pv + extra
         s = self._shadow()
+        if not (self._small or self._tiny):
+            h = max(h, CONTROL_H - s)
         bump = 1 if self._ring else 0
         if self._icon is not None and not self.text():
             return QSize(h + s + bump, h + s + bump)
@@ -105,25 +133,37 @@ class BrutalButton(QPushButton):
 
     # --- состояния -------------------------------------------------------------
 
+    def _set_fd(self, v) -> None:
+        self._fd = float(v)
+        self.update()
+
+    def _retarget(self) -> None:
+        s = self._shadow()
+        target = s if self._pressed else (s / 2 if self._hover else 0)
+        self._fd_anim.stop()
+        self._fd_anim.setStartValue(self._fd)
+        self._fd_anim.setEndValue(float(target))
+        self._fd_anim.start()
+
     def enterEvent(self, e):
         self._hover = True
-        self.update()
+        self._retarget()
         super().enterEvent(e)
 
     def leaveEvent(self, e):
         self._hover = self._pressed = False
-        self.update()
+        self._retarget()
         super().leaveEvent(e)
 
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
             self._pressed = True
-            self.update()
+            self._retarget()
         super().mousePressEvent(e)
 
     def mouseReleaseEvent(self, e):
         self._pressed = False
-        self.update()
+        self._retarget()
         super().mouseReleaseEvent(e)
 
     # --- цвета -----------------------------------------------------------------
@@ -157,12 +197,7 @@ class BrutalButton(QPushButton):
         w, h = self.width(), self.height()
 
         s = self._shadow()
-        if self._pressed:
-            fd = s
-        elif self._hover:
-            fd = s // 2
-        else:
-            fd = 0
+        fd = round(self._fd)
         fw, fh = w - s, h - s
 
         ring = self._ring and theme.current_mode() == "light"
@@ -194,19 +229,42 @@ class BrutalButton(QPushButton):
 
 
 class BrutalLineEdit(QLineEdit):
-    """Поле ввода с кобальтовой смещённой тенью на фокусе (DS focus-ring)."""
+    """Поле ввода с той же блочной тенью, что у кнопок: приглушённой в покое,
+    плавно кобальтовой на фокусе. Тень рисуется в QSS-отступе справа/снизу
+    (``QLineEdit[brutal="true"]`` в theme.py), поэтому края совпадают с кнопками."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setProperty("brutal", True)
+        self.setFixedHeight(CONTROL_H)
+        self._glow = 0.0
+        self._glow_anim = _anim(self, _GLOW_MS, self._set_glow)
+
+    def _set_glow(self, v) -> None:
+        self._glow = float(v)
+        self.update()
+
+    def _glow_to(self, target: float) -> None:
+        self._glow_anim.stop()
+        self._glow_anim.setStartValue(self._glow)
+        self._glow_anim.setEndValue(target)
+        self._glow_anim.start()
 
     def focusInEvent(self, e):
-        eff = QGraphicsDropShadowEffect(self)
-        eff.setBlurRadius(0)
-        eff.setOffset(4, 4)
-        eff.setColor(QColor(theme.tokens()["accent"]))
-        self.setGraphicsEffect(eff)
+        self._glow_to(1.0)
         super().focusInEvent(e)
 
     def focusOutEvent(self, e):
-        self.setGraphicsEffect(None)
+        self._glow_to(0.0)
         super().focusOutEvent(e)
+
+    def paintEvent(self, e):
+        t = theme.tokens()
+        p = QPainter(self)
+        s = _SHADOW
+        p.fillRect(QRect(s, s, self.width() - s, self.height() - s), _mix(t["border2"], t["accent"], self._glow))
+        p.end()
+        super().paintEvent(e)
 
 
 class BrutalCheckBox(QCheckBox):

@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QApplication
 from mys_centralized import CentralizedService
 from mys_decentralized import P2PService
 
-from . import prefs
+from . import motion, prefs
 from .controller import AppController
 from .theme import app_icon, apply_theme
 from .windows.frameless import FramelessWindow
@@ -84,6 +84,7 @@ class AppShell(FramelessWindow):
             old.deleteLater()
         self.content.addWidget(widget)
         self.content.setCurrentWidget(widget)
+        motion.fade_in(widget, 260)  # вход ↔ главное окно — мягкое проявление
 
 
 def main() -> None:
