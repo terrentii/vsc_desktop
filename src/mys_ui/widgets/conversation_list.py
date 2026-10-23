@@ -63,18 +63,25 @@ class ConversationList(QWidget):
 
         from mys_ui.widgets.brutal import BrutalButton
 
+        # Одна строка: главное действие + квадраты «#» (войти по коду) и «@»
+        # (написать пользователю) — в «Центре»; в P2P только «+ НОВЫЙ КАНАЛ».
         wrap = QWidget()
-        wl = QVBoxLayout(wrap)
+        wl = QHBoxLayout(wrap)
         wl.setContentsMargins(12, 12, 12, 12)
+        wl.setSpacing(8)
         # DS create-btn: чернильное лицо + кобальтовая тень
         self.btn_new = BrutalButton("+ Новый диалог", "ink", shadow="accent")
-        wl.addWidget(self.btn_new)
-        self.btn_join = BrutalButton("Войти по коду", "default")
+        wl.addWidget(self.btn_new, 1)
+        self.btn_join = BrutalButton("#", "default")
+        self.btn_join.setToolTip("Войти в комнату по коду")
         self.btn_join.hide()  # только в режиме «Центр» (см. set_mode)
         wl.addWidget(self.btn_join)
-        self.btn_write = BrutalButton("Написать пользователю", "default")
+        self.btn_write = BrutalButton("@", "default")
+        self.btn_write.setToolTip("Написать пользователю по логину")
         self.btn_write.hide()
         wl.addWidget(self.btn_write)
+        for b in (self.btn_join, self.btn_write):
+            b.setFixedWidth(b.sizeHint().height())  # квадрат той же высоты, что и кнопка рядом
         layout.addWidget(wrap)
 
         self.list.itemClicked.connect(self._on_item)
@@ -88,7 +95,7 @@ class ConversationList(QWidget):
         self._mode = mode
         self.title.setText("КАНАЛЫ" if mode == DECENTRALIZED else "КОМНАТЫ")
         self.btn_new.setText(
-            "+ НОВЫЙ КАНАЛ" if mode == DECENTRALIZED else "+ НОВАЯ КОМНАТА"
+            "+ НОВЫЙ КАНАЛ" if mode == DECENTRALIZED else "+ КОМНАТА"
         )
         self.btn_join.setVisible(mode != DECENTRALIZED)
         self.btn_write.setVisible(mode != DECENTRALIZED)
