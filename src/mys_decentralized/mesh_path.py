@@ -17,7 +17,7 @@ from .protocol import Role
 from .rendezvous import RendezvousClient
 from .transport import RelayTransport, Transport
 
-MESH_GRACE = 3.0
+MESH_GRACE = 20.0  # медленный сервер не уводит канал в mesh (как у телефона)
 
 
 class MeshPathTransport(Transport):
