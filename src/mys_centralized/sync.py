@@ -52,6 +52,8 @@ class SyncEngine:
         self._on_message = on_message  # callback(conv_id, local_id, RemoteMessage)
         self._page_limit = page_limit
         self._own_username = own_username  # для дедупа собственного эха без client_msg_id
+        # conv_id → комната глазами пользователя (диалог, название, аватар, собеседник)
+        self.room_meta: dict[int, dict] = {}
 
     # -- сопоставление комнат и бесед --------------------------------------
 
@@ -95,7 +97,34 @@ class SyncEngine:
     def _conv_for_room_obj(self, room) -> int:
         if room.code:
             self._vault.settings.set(_code_key(room.id), room.code.encode("utf-8"))
-        return self._conv_for_room(room.id, name=room.name)
+        conv_id = self._conv_for_room(room.id, name=room.name)
+        if room.meta:
+            self.room_meta[conv_id] = room.meta
+        return conv_id
+
+    def remember_room(self, data: dict) -> int:
+        """Ответ сервера о комнате (dict) → мета + локальная беседа. → conv_id."""
+        from .api_client import RestClient
+        return self._conv_for_room_obj(RestClient._room_from(data))
+
+    def conv_of_room(self, server_room_id: int):
+        return self._conv_for_room(server_room_id, create=False)
+
+    def server_room_of(self, conv_id) -> int:
+        return self._server_room_of(conv_id)
+
+    def forget_room(self, conv_id) -> None:
+        """Комнаты больше нет у нас (вышли, выгнали, приглашение отклонено): стереть локально."""
+        try:
+            rid = self._server_room_of(conv_id)
+        except Exception:
+            rid = None
+        self.room_meta.pop(conv_id, None)
+        self._vault.messages.delete_for_conversation(conv_id)
+        self._vault.conversations.delete(conv_id)
+        if rid is not None:
+            self._vault.settings.delete(_cursor_key(rid))
+            self._vault.settings.delete(_code_key(rid))
 
     async def sync_history(self, server_room_id: int):
         """Дозагрузить историю комнаты от текущего курсора страницами."""

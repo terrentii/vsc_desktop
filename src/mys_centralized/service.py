@@ -23,7 +23,7 @@ from .account import (
     wipe_local_cache,
 )
 from .api_client import RestClient
-from .errors import AuthError
+from .errors import AuthError, ServerError
 from .models import Session
 from .sync import SyncEngine
 from .ws_client import WsClient
@@ -70,6 +70,7 @@ class CentralizedService:
         on_message: OnMessage | None = None,
         on_state_change: OnStateChange | None = None,
         on_error: OnError | None = None,
+        on_room_event=None,
         page_limit: int = 200,
         room_poll_interval: float = 20.0,
     ):
@@ -83,6 +84,9 @@ class CentralizedService:
         self._on_message = on_message or _noop
         self._on_state_change = on_state_change or _noop
         self._on_error = on_error or _noop
+        # (conv_id, kind, data): room_updated / typing / read / presence
+        self._on_room_event = on_room_event or _noop
+        self._avatars: dict[tuple[int, int], bytes | None] = {}
         self._page_limit = page_limit
 
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -352,6 +356,10 @@ class CentralizedService:
                     conv_id = sync.apply_ws_delete(event)
                     if conv_id is not None:
                         self._on_message(conv_id, 0)
+                elif etype in ("room_updated", "room_removed"):
+                    await self._refresh_room(int(event["room_id"]), removed=etype == "room_removed")
+                elif etype in ("typing", "read", "presence"):
+                    self._peer_event(sync, etype, event)
         except asyncio.CancelledError:
             raise
         except AuthError as exc:
@@ -360,6 +368,108 @@ class CentralizedService:
         except Exception as exc:  # сетевой/протокольный сбой live-канала
             self._on_state_change("disconnected")
             self._on_error(exc)
+
+    # --- настройки комнат, диалоги, аватарки ----------------------------------
+
+    def room_meta(self, conversation_id: int) -> dict | None:
+        """Комната глазами пользователя (из последнего синка/события), без сети."""
+        return self._sync.room_meta.get(conversation_id) if self._sync is not None else None
+
+    def room_call(self, conversation_id: int, op: str, *args, timeout: float = 20.0):
+        """Операция RestClient над комнатой беседы: update_room, add_member,
+        remove_member, leave_room, dialog_action, set_room_title, put_avatar,
+        delete_avatar → свежая мета или None (комнаты у нас больше нет)."""
+        return self._submit(self._room_call(conversation_id, op, *args), timeout)
+
+    async def _room_call(self, conversation_id, op, *args):
+        if self._sync is None:
+            raise RuntimeError("нет активной сессии")
+        rid = self._sync.server_room_of(conversation_id)
+        res = await getattr(self._rest, op)(rid, *args)
+        if res.get("deleted") or res.get("left"):
+            self._sync.forget_room(conversation_id)
+            self._on_state_change("synced")
+            return None
+        self._sync.remember_room(res)
+        self._on_room_event(conversation_id, "room_updated", {})
+        return res
+
+    def invite(self, login: str, *, timeout: float = 20.0) -> int:
+        """«Написать пользователю» → conv_id (новая или уже существующая беседа)."""
+        return self._submit(self._invite(login), timeout)
+
+    async def _invite(self, login) -> int:
+        data = await self._rest.invite(login)
+        conv_id = self._sync.remember_room(data)
+        await self._sync.sync_history(int(data["id"]))
+        self._on_state_change("synced")
+        return conv_id
+
+    def avatar(self, conversation_id: int, *, timeout: float = 20.0) -> bytes | None:
+        """PNG аватарки комнаты глазами пользователя; кэш по (беседа, rev)."""
+        meta = self.room_meta(conversation_id) or {}
+        rev = int(meta.get("avatar_rev") or 0)
+        if rev == 0:
+            return None
+        key = (conversation_id, rev)
+        if key not in self._avatars:
+            rid = self._sync.server_room_of(conversation_id)
+            self._avatars[key] = self._submit(self._rest.get_avatar(rid), timeout)
+        return self._avatars[key]
+
+    def typing(self, conversation_id: int) -> None:
+        """«Печатает…» собеседнику (без ожидания; без соединения — пропуск)."""
+        if self._loop is None or self._ws is None or self._sync is None:
+            return
+        rid = self._sync.server_room_of(conversation_id)
+        asyncio.run_coroutine_threadsafe(self._ws.send({"type": "typing", "room_id": rid}), self._loop)
+
+    def mark_read(self, conversation_id: int, wire_id: int) -> None:
+        """Отметка прочтения до wire_id (без ожидания; ошибки сети — молча)."""
+        if self._loop is None or self._sync is None:
+            return
+
+        async def go():
+            try:
+                await self._rest.mark_read(self._sync.server_room_of(conversation_id), wire_id)
+            except Exception:
+                pass
+
+        asyncio.run_coroutine_threadsafe(go(), self._loop)
+
+    def me(self, *, timeout: float = 15.0) -> dict:
+        return self._submit(self._rest.me(), timeout)
+
+    def set_privacy(self, *, timeout: float = 15.0, **fields) -> dict:
+        return self._submit(self._rest.set_me(**fields), timeout)
+
+    async def _refresh_room(self, server_room_id: int, *, removed: bool = False) -> None:
+        conv_id = self._sync.conv_of_room(server_room_id)
+        if not removed:
+            try:
+                data = await self._rest.get_room(server_room_id)
+            except ServerError:
+                removed = True  # выгнали / комнату удалили — 403/404
+            else:
+                conv_id = self._sync.remember_room(data)
+                self._on_room_event(conv_id, "room_updated", {})
+                self._on_state_change("synced")
+                return
+        if conv_id is not None:
+            self._sync.forget_room(conv_id)
+            self._on_state_change("synced")
+
+    def _peer_event(self, sync, etype: str, event: dict) -> None:
+        conv_id = sync.conv_of_room(int(event["room_id"]))
+        if conv_id is None:
+            return
+        meta = sync.room_meta.get(conv_id)
+        if meta is not None and event.get("login") == meta.get("peer"):
+            if etype == "read":
+                meta["peer_read"] = max(int(meta.get("peer_read") or 0), int(event.get("message_id") or 0))
+            elif etype == "presence":
+                meta["peer_online"] = bool(event.get("online"))
+        self._on_room_event(conv_id, etype, event)
 
     async def _create_room(self, name) -> int:
         if self._sync is None:

@@ -1,7 +1,7 @@
 """Боковая панель: заголовок + счётчик, список диалогов, кнопка нового диалога."""
 
 from PySide6 import QtGui
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -20,6 +20,7 @@ class ConversationList(QWidget):
     conversation_selected = Signal(int)
     new_conversation_requested = Signal()
     join_requested = Signal()  # «Центр»: войти в комнату по коду
+    write_requested = Signal()  # «Центр»: написать пользователю по логину (диалог)
     conversation_delete_requested = Signal(int)
     conversation_rename_requested = Signal(int)
 
@@ -57,6 +58,7 @@ class ConversationList(QWidget):
         self.list.setTextElideMode(Qt.ElideRight)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list.setWordWrap(False)
+        self.list.setIconSize(QSize(34, 34))
         layout.addWidget(self.list, 1)
 
         from mys_ui.widgets.brutal import BrutalButton
@@ -70,11 +72,15 @@ class ConversationList(QWidget):
         self.btn_join = BrutalButton("Войти по коду", "default")
         self.btn_join.hide()  # только в режиме «Центр» (см. set_mode)
         wl.addWidget(self.btn_join)
+        self.btn_write = BrutalButton("Написать пользователю", "default")
+        self.btn_write.hide()
+        wl.addWidget(self.btn_write)
         layout.addWidget(wrap)
 
         self.list.itemClicked.connect(self._on_item)
         self.btn_new.clicked.connect(self.new_conversation_requested)
         self.btn_join.clicked.connect(self.join_requested)
+        self.btn_write.clicked.connect(self.write_requested)
 
     def set_mode(self, mode: str) -> None:
         if mode != self._mode:
@@ -85,19 +91,26 @@ class ConversationList(QWidget):
             "+ НОВЫЙ КАНАЛ" if mode == DECENTRALIZED else "+ НОВАЯ КОМНАТА"
         )
         self.btn_join.setVisible(mode != DECENTRALIZED)
+        self.btn_write.setVisible(mode != DECENTRALIZED)
 
     def populate(self, conversations: list[dict]) -> None:
         # populate дёргается на каждом событии синка — подсветка выбранной
         # комнаты должна переживать пересборку списка.
         # «Избранное» (личная комната «Центра») закреплено первым; сортировка
         # стабильная — порядок остальных не меняется.
+        # Приглашения в диалог — самыми первыми, затем «Избранное».
         conversations = sorted(
-            conversations, key=lambda c: 0 if c.get("title") == "Избранное" else 1
+            conversations,
+            key=lambda c: 0 if c.get("invited") else (1 if c.get("title") == "Избранное" else 2),
         )
         self.list.clear()
+        from mys_ui.widgets.avatar import avatar_pixmap
         for c in conversations:
             title = c["title"] or f"Диалог {c['id']}"
-            item = QListWidgetItem(title)
+            label = f"{title}  · приглашение" if c.get("invited") else title
+            item = QListWidgetItem(label)
+            if c.get("central"):
+                item.setIcon(QtGui.QIcon(avatar_pixmap(c.get("avatar"), title, 68)))
             # тултип рендерит HTML в режиме AutoText — название чужое, экранируем
             item.setToolTip(QtGui.Qt.convertFromPlainText(title))
             item.setData(Qt.UserRole, c["id"])
