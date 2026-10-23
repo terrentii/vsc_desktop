@@ -257,11 +257,12 @@ class AppController:
     # --- централизованный режим ------------------------------------------------
 
     def add_central_observer(
-        self, *, on_message=None, on_state_change=None, on_error=None
+        self, *, on_message=None, on_state_change=None, on_error=None, on_room_event=None
     ) -> None:
         """Подписаться на события централизованного сервиса (UI маршалит в Qt)."""
         self._central_observers.append(
-            {"message": on_message, "state": on_state_change, "error": on_error}
+            {"message": on_message, "state": on_state_change, "error": on_error,
+             "room": on_room_event}
         )
 
     def _ensure_central(self):
@@ -273,6 +274,7 @@ class AppController:
                 on_message=self._central_on_message,
                 on_state_change=self._central_on_state,
                 on_error=self._central_on_error,
+                on_room_event=lambda cid, kind, data: self._notify("room", cid, kind, data),
             )
             self._central.start()
         return self._central
@@ -291,6 +293,16 @@ class AppController:
 
     def _central_on_error(self, exc: Exception) -> None:
         self._notify("error", exc)
+
+    def central(self):
+        """Сервис «Центра» (настройки комнат, диалоги, аватарки — его методы)."""
+        return self._ensure_central()
+
+    def central_room_meta(self, conversation_id: int) -> dict | None:
+        """Мета комнаты без сети; None — не «Центр» или сервис не поднят."""
+        if self._central is None:
+            return None
+        return self._central.room_meta(conversation_id)
 
     def central_available(self) -> bool:
         """Сконфигурирован ли централизованный сервис (есть фабрика)."""

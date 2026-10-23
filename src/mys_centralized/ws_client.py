@@ -38,6 +38,17 @@ class WsClient:
         self._max_backoff = max_backoff
         self._jitter = jitter
         self._closed = False
+        self._ws = None  # текущее соединение (для исходящих кадров, напр. typing)
+
+    async def send(self, frame: dict) -> None:
+        """Отправить кадр в живое соединение; нет соединения — молча пропустить."""
+        ws = self._ws
+        if ws is None:
+            return
+        try:
+            await ws.send(json.dumps(frame))
+        except Exception:
+            pass  # обрыв — переподключится цикл events()
 
     def close(self) -> None:
         """Остановить реконнект-цикл (после текущей итерации)."""
@@ -74,9 +85,13 @@ class WsClient:
                 raise AuthError(hello.get("code") or "unauthorized")
             if mtype != "ready":
                 raise ProtocolError(f"unexpected first frame: {mtype!r}")
-            yield {"type": "ready"}
-            async for raw in ws:
-                yield self._parse(raw)
+            self._ws = ws
+            try:
+                yield {"type": "ready"}
+                async for raw in ws:
+                    yield self._parse(raw)
+            finally:
+                self._ws = None
 
     async def _sleep_backoff(self, base: float) -> None:
         await asyncio.sleep(base + random.uniform(0, self._jitter))

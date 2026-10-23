@@ -21,13 +21,14 @@ from .windows.unlock import UnlockWindow
 _RENDEZVOUS_URL = os.environ.get("MYS_RENDEZVOUS_URL", "wss://soufos.ru/p2p")
 
 
-def _central_factory(vault, *, on_message, on_state_change, on_error):
+def _central_factory(vault, *, on_message, on_state_change, on_error, on_room_event=None):
     """Боевая фабрика: ws_url выводится из server_url входа (см. service)."""
     return CentralizedService(
         vault,
         on_message=on_message,
         on_state_change=on_state_change,
         on_error=on_error,
+        on_room_event=on_room_event,
     )
 
 

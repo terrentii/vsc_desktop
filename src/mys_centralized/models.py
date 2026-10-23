@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -24,6 +24,9 @@ class Room:
     is_direct: bool = False
     updated_at: str | None = None
     code: str | None = None  # 10-значный код комнаты — им делятся для входа
+    # Полный ответ сервера глазами вызывающего: is_dialog, title, avatar_rev, peer,
+    # peer_read, peer_online, role, pending_invite… (см. vsc_web/dialogs.py)
+    meta: dict = field(default_factory=dict)
 
 
 @dataclass

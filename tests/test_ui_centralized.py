@@ -18,8 +18,13 @@ FAST = {"time_cost": 1, "memory_cost": 8, "parallelism": 1}
 class FakeCentral:
     """Имитация CentralizedService поверх реального vault (без сети/потоков)."""
 
-    def __init__(self, vault, *, on_message, on_state_change, on_error):
+    def __init__(self, vault, *, on_message, on_state_change, on_error, on_room_event=None):
         self.vault = vault
+        self._on_room_event = on_room_event
+        self.metas: dict[int, dict] = {}  # мета комнат (диалоги) — задают тесты
+        self.typed: list[int] = []
+        self.read: list[tuple[int, int]] = []
+        self.calls: list[tuple] = []
         self._on_message = on_message
         self._on_state_change = on_state_change
         self._on_error = on_error
@@ -32,6 +37,22 @@ class FakeCentral:
 
     def start(self):
         self.started = True
+
+    def room_meta(self, conversation_id):
+        return self.metas.get(conversation_id)
+
+    def avatar(self, conversation_id):
+        return None
+
+    def typing(self, conversation_id):
+        self.typed.append(conversation_id)
+
+    def mark_read(self, conversation_id, wire_id):
+        self.read.append((conversation_id, wire_id))
+
+    def room_call(self, conversation_id, op, *args):
+        self.calls.append((conversation_id, op, *args))
+        return self.metas.get(conversation_id)
 
     def stop(self):
         self.started = False
