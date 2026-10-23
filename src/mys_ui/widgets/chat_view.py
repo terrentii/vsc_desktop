@@ -67,6 +67,10 @@ _MAX_IMAGE_H = 420  # максимальная высота инлайн-пре�
 _BTN_PAD_X = 14     # горизонтальный внутр. отступ кнопок (вкл. 2px рамку)
 _BTN_PAD_Y = 6      # вертикальный внутр. отступ кнопок (вкл. 2px рамку)
 
+_BUBBLE_PAD = 12    # внутренний отступ пузыря диалога
+_BUBBLE_SHADOW = 3  # блок-тень пузыря (своё — кобальтом)
+_BUBBLE_GAP = 6     # зазор между пузырями по вертикали
+
 _CODE_FENCE_RE = re.compile(r"```([\s\S]*?)```")
 
 _MONTHS = ["янв", "фев", "мар", "апр", "май", "июн",
@@ -188,6 +192,23 @@ class _JournalDelegate(QStyledItemDelegate):
         if not actions:
             return []
         fm = QFontMetrics(_btn_font())
+        if self._dialog():
+            # кнопки — в свободном поле рядом с пузырём (у своих слева, у чужих справа)
+            bubble = self._bubble_geom(option, index)[0]
+            btn_h = fm.height() + _BTN_PAD_Y * 2 + _BTN_SHADOW
+            own = index.data(_DIRECTION_ROLE) == "out"
+            x = bubble.left() - 10 if own else bubble.right() + _BUBBLE_SHADOW + 10
+            rects = []
+            for label in (reversed(actions) if own else actions):
+                w = fm.horizontalAdvance(label) + _BTN_PAD_X * 2 + _BTN_SHADOW
+                if own:
+                    x -= w
+                    rects.append((QRect(x, bubble.top(), w, btn_h), label))
+                    x -= 8
+                else:
+                    rects.append((QRect(x, bubble.top(), w, btn_h), label))
+                    x += w + 8
+            return rects
         name_h = QFontMetrics(_name_font()).height()
         btn_h = fm.height() + _BTN_PAD_Y * 2 + _BTN_SHADOW
         top = option.rect.top() + _PAD_Y + (name_h - btn_h) // 2
@@ -251,7 +272,100 @@ class _JournalDelegate(QStyledItemDelegate):
         laid, total_h = self._layout_segments(cw, body)
         return cx, cw, name_h, "segments", laid, total_h
 
+    # -- диалог: пузыри (свои справа кобальтом), время и галочки внизу ----------
+
+    def _dialog(self) -> bool:
+        return bool(getattr(self._view, "dialog_mode", False))
+
+    def _natural_width(self, body: str) -> int:
+        bf, mf = QFontMetrics(_body_font()), QFontMetrics(_mono_font())
+        w = 0
+        for is_code, text in _split_segments(body):
+            fm = mf if is_code else bf
+            line = max((fm.horizontalAdvance(ln) for ln in text.split("\n")), default=0)
+            w = max(w, line + (2 * _CODE_PAD + 4 if is_code else 4))
+            if is_code:
+                w = max(w, 280)  # шапка «//// CODE … КОПИРОВАТЬ»
+        return w
+
+    def _bubble_geom(self, option, index):
+        """(пузырь без тени, cw, kind, payload, content_h, quote_h, meta_h)."""
+        r = option.rect
+        avail = r.width() - _PAD_L - _PAD_R
+        max_cw = max(160, min(int(avail * 0.72), 640) - 2 * _BUBBLE_PAD)
+        meta_h = QFontMetrics(_small_mono_font()).height()
+        _, quote_h = self._quote_of(index)
+        pixmap = index.data(_IMAGE_ROLE)
+        if index.data(_KIND_ROLE) == "image" and isinstance(pixmap, QPixmap) and not pixmap.isNull():
+            scaled = self._scaled_image(max_cw - 2, pixmap)
+            cw, kind, payload, content_h = max(160, scaled.width() + 2), "image", scaled, scaled.height() + 2
+        else:
+            body = index.data(Qt.DisplayRole) or ""
+            cw = max(160, min(max_cw, self._natural_width(body)))
+            payload, content_h = self._layout_segments(cw, body)
+            kind = "segments"
+        if quote_h:
+            qw = QFontMetrics(_small_mono_font()).horizontalAdvance(self._quote_of(index)[0]) + 4
+            cw = max(cw, min(max_cw, qw))
+        bw = cw + 2 * _BUBBLE_PAD
+        bh = _BUBBLE_PAD + quote_h + content_h + 6 + meta_h + _BUBBLE_PAD - 2
+        own = index.data(_DIRECTION_ROLE) == "out"
+        left = r.right() - _PAD_R - bw - _BUBBLE_SHADOW if own else r.left() + _PAD_L
+        return QRect(left, r.top() + _BUBBLE_GAP, bw, bh), cw, kind, payload, content_h, quote_h, meta_h
+
+    def _paint_bubble(self, painter, option, index):
+        t = theme.tokens()
+        own = index.data(_DIRECTION_ROLE) == "out"
+        bubble, cw, kind, payload, content_h, quote_h, meta_h = self._bubble_geom(option, index)
+        painter.save()
+        painter.setRenderHint(painter.RenderHint.Antialiasing, False)
+        s = _BUBBLE_SHADOW
+        painter.fillRect(bubble.translated(s, s), QColor(t["accent"] if own else t["line"]))
+        painter.fillRect(bubble, QColor(t["line"]))
+        painter.fillRect(bubble.adjusted(2, 2, -2, -2), QColor(t["accentSoft"] if own else t["surface"]))
+        x, y = bubble.left() + _BUBBLE_PAD, bubble.top() + _BUBBLE_PAD
+        quote, _ = self._quote_of(index)
+        if quote_h:
+            painter.setFont(_small_mono_font())
+            painter.setPen(QColor(t["text3"]))
+            qfm = QFontMetrics(_small_mono_font())
+            painter.drawText(QRect(x, y, cw, quote_h), Qt.AlignVCenter | Qt.AlignLeft,
+                             qfm.elidedText(quote, Qt.ElideRight, cw))
+        pressed_rect = getattr(self._view, "_pressed_rect", None)
+        self._paint_content(painter, t, x, y + quote_h, cw, kind, payload, pressed_rect)
+        # низ пузыря: время, у своих — ✓ (на сервере) / ✓✓ кобальтом (прочитано)
+        meta_rect = QRect(x, bubble.bottom() - _BUBBLE_PAD - meta_h + 2, cw, meta_h)
+        when = index.data(_TIME_ROLE) or ""
+        status = index.data(_STATUS_ROLE)
+        mark, mark_color = "", t["text3"]
+        if own:
+            wire = index.data(_WIRE_ROLE)
+            if status in ("pending", "failed") or wire is None:
+                mark, mark_color = ("● НЕ ОТПРАВЛЕНО", t["warn"]) if status == "failed" else ("●", t["warn"])
+            elif wire <= int(getattr(self._view, "peer_read", 0) or 0):
+                mark, mark_color = "✓✓", t["accent"]
+            else:
+                mark = "✓"
+        painter.setFont(_small_mono_font())
+        sfm = QFontMetrics(_small_mono_font())
+        right = meta_rect.right()
+        if mark:
+            painter.setPen(QColor(mark_color))
+            painter.drawText(QRect(right - sfm.horizontalAdvance(mark), meta_rect.top(),
+                                   sfm.horizontalAdvance(mark) + 1, meta_h), Qt.AlignVCenter | Qt.AlignRight, mark)
+            right -= sfm.horizontalAdvance(mark) + 8
+        painter.setPen(QColor(t["text3"]))
+        painter.drawText(QRect(meta_rect.left(), meta_rect.top(), right - meta_rect.left(), meta_h),
+                         Qt.AlignVCenter | Qt.AlignRight, when)
+        for rect, label in self._action_rects(option, index):
+            _paint_button(painter, rect, label, t, accent=(label == "ОТВЕТИТЬ"),
+                          pressed=(rect == pressed_rect))
+        painter.restore()
+
     def sizeHint(self, option, index):
+        if self._dialog():
+            bubble = self._bubble_geom(option, index)[0]
+            return QSize(option.rect.width(), bubble.height() + 2 * _BUBBLE_GAP + _BUBBLE_SHADOW)
         _, _, name_h, _, _, content_h = self._content_geom(option, index)
         _, quote_h = self._quote_of(index)
         return QSize(
@@ -261,14 +375,18 @@ class _JournalDelegate(QStyledItemDelegate):
 
     def _copy_button_rects(self, option, index) -> list[tuple[QRect, str]]:
         """Кликабельные зоны «КОПИРОВАТЬ» в шапках код-блоков (для editorEvent)."""
-        cx, cw, name_h, kind, payload, _h = self._content_geom(option, index)
+        if self._dialog():
+            bubble, cw, kind, payload, _h, quote_h, _m = self._bubble_geom(option, index)
+            x, y = bubble.left() + _BUBBLE_PAD, bubble.top() + _BUBBLE_PAD + quote_h
+        else:
+            cx, cw, name_h, kind, payload, _h = self._content_geom(option, index)
+            _, quote_h = self._quote_of(index)
+            x = option.rect.left() + cx
+            y = option.rect.top() + _PAD_Y + name_h + quote_h + _NAME_GAP
         if kind != "segments":
             return []
-        _, quote_h = self._quote_of(index)
         rects: list[tuple[QRect, str]] = []
         fm = QFontMetrics(_btn_font())
-        x = option.rect.left() + cx
-        y = option.rect.top() + _PAD_Y + name_h + quote_h + _NAME_GAP
         btn_h = fm.height() + _BTN_PAD_Y * 2 + _BTN_SHADOW
         for is_code, text, h in payload:
             if is_code:
@@ -323,7 +441,60 @@ class _JournalDelegate(QStyledItemDelegate):
                     return True
         return super().editorEvent(event, model, option, index)
 
+
+    def _paint_content(self, painter, t, x, content_top, cw, kind, payload, pressed_rect):
+        """Тело сообщения: превью картинки либо сегменты текст/код (журнал и пузыри)."""
+        if kind == "image":
+            # тонкая рамка вокруг превью — паритет с вебом
+            frame = QRect(x, content_top, payload.width() + 2, payload.height() + 2)
+            painter.fillRect(frame, QColor(t["surface"]))
+            painter.setPen(QPen(QColor(t["border2"]), 1))
+            painter.drawRect(frame.adjusted(0, 0, -1, -1))
+            painter.drawPixmap(x + 1, content_top + 1, payload)
+        else:
+            flags = int(Qt.TextWordWrap)
+            y = content_top
+            small = _small_mono_font()
+            sfm = QFontMetrics(small)
+            for is_code, text, h in payload:
+                if is_code:
+                    # шапка «//// CODE … КОПИРОВАТЬ» + блок кода — как в вебе
+                    block = QRect(x, y, cw, h)
+                    painter.fillRect(block, QColor(t["surface3"]))
+                    painter.setPen(QPen(QColor(t["border2"]), 1))
+                    painter.drawRect(block.adjusted(0, 0, -1, -1))
+                    painter.drawLine(x, y + _CODE_HEAD, x + cw - 1, y + _CODE_HEAD)
+
+                    painter.setFont(small)
+                    painter.setPen(QColor(t["text2"]))
+                    head = QRect(x + _CODE_PAD, y, cw - _CODE_PAD * 2, _CODE_HEAD)
+                    painter.drawText(head, Qt.AlignVCenter | Qt.AlignLeft, "//// CODE")
+                    bfm = QFontMetrics(_btn_font())
+                    bw = bfm.horizontalAdvance("КОПИРОВАТЬ") + _BTN_PAD_X * 2 + _BTN_SHADOW
+                    bh = bfm.height() + _BTN_PAD_Y * 2 + _BTN_SHADOW
+                    copy_rect = QRect(x + cw - bw - 6, y + (_CODE_HEAD - bh) // 2, bw, bh)
+                    _paint_button(
+                        painter, copy_rect, "КОПИРОВАТЬ", t,
+                        pressed=(copy_rect == pressed_rect),
+                    )
+
+                    painter.setFont(_mono_font())
+                    painter.setPen(QColor(t["text"]))
+                    painter.drawText(
+                        QRect(x + _CODE_PAD, y + _CODE_HEAD + _CODE_PAD,
+                              cw - _CODE_PAD * 2, h - _CODE_HEAD - _CODE_PAD * 2),
+                        flags, text,
+                    )
+                else:
+                    painter.setFont(_body_font())
+                    painter.setPen(QColor(t["text"]))
+                    painter.drawText(QRect(x, y, cw, h), flags, text)
+                y += h + _SEG_GAP
+
     def paint(self, painter, option, index):
+        if self._dialog():
+            self._paint_bubble(painter, option, index)
+            return
         t = theme.tokens()
         own = index.data(_DIRECTION_ROLE) == "out"
         author = index.data(_AUTHOR_ROLE) or ("я" if own else "Собеседник")
@@ -388,52 +559,7 @@ class _JournalDelegate(QStyledItemDelegate):
             )
 
         content_top = top + name_h + quote_h + _NAME_GAP
-        if kind == "image":
-            # тонкая рамка вокруг превью — паритет с вебом
-            frame = QRect(x, content_top, payload.width() + 2, payload.height() + 2)
-            painter.fillRect(frame, QColor(t["surface"]))
-            painter.setPen(QPen(QColor(t["border2"]), 1))
-            painter.drawRect(frame.adjusted(0, 0, -1, -1))
-            painter.drawPixmap(x + 1, content_top + 1, payload)
-        else:
-            flags = int(Qt.TextWordWrap)
-            y = content_top
-            small = _small_mono_font()
-            sfm = QFontMetrics(small)
-            for is_code, text, h in payload:
-                if is_code:
-                    # шапка «//// CODE … КОПИРОВАТЬ» + блок кода — как в вебе
-                    block = QRect(x, y, cw, h)
-                    painter.fillRect(block, QColor(t["surface3"]))
-                    painter.setPen(QPen(QColor(t["border2"]), 1))
-                    painter.drawRect(block.adjusted(0, 0, -1, -1))
-                    painter.drawLine(x, y + _CODE_HEAD, x + cw - 1, y + _CODE_HEAD)
-
-                    painter.setFont(small)
-                    painter.setPen(QColor(t["text2"]))
-                    head = QRect(x + _CODE_PAD, y, cw - _CODE_PAD * 2, _CODE_HEAD)
-                    painter.drawText(head, Qt.AlignVCenter | Qt.AlignLeft, "//// CODE")
-                    bfm = QFontMetrics(_btn_font())
-                    bw = bfm.horizontalAdvance("КОПИРОВАТЬ") + _BTN_PAD_X * 2 + _BTN_SHADOW
-                    bh = bfm.height() + _BTN_PAD_Y * 2 + _BTN_SHADOW
-                    copy_rect = QRect(x + cw - bw - 6, y + (_CODE_HEAD - bh) // 2, bw, bh)
-                    _paint_button(
-                        painter, copy_rect, "КОПИРОВАТЬ", t,
-                        pressed=(copy_rect == pressed_rect),
-                    )
-
-                    painter.setFont(_mono_font())
-                    painter.setPen(QColor(t["text"]))
-                    painter.drawText(
-                        QRect(x + _CODE_PAD, y + _CODE_HEAD + _CODE_PAD,
-                              cw - _CODE_PAD * 2, h - _CODE_HEAD - _CODE_PAD * 2),
-                        flags, text,
-                    )
-                else:
-                    painter.setFont(_body_font())
-                    painter.setPen(QColor(t["text"]))
-                    painter.drawText(QRect(x, y, cw, h), flags, text)
-                y += h + _SEG_GAP
+        self._paint_content(painter, t, x, content_top, cw, kind, payload, pressed_rect)
         painter.restore()
 
 
@@ -525,6 +651,8 @@ class ChatView(QListWidget):
         # Действия строк доступны только в «Центре» с активной сессией —
         # выставляет MainWindow при смене режима/сессии.
         self.actions_enabled = False
+        self.dialog_mode = False  # диалог «Центра»: пузыри вместо журнала
+        self.peer_read = 0        # wire-id, до которого собеседник прочитал (✓✓)
         self._hover_row = -1        # кнопки действий видны только у этой строки
         self._pressed_rect = None   # кнопка, «утопленная» нажатием (анимация)
         self.setMouseTracking(True)
@@ -578,12 +706,14 @@ class ChatView(QListWidget):
     def show_messages(
         self, messages: list[dict], *,
         peer_label: str = "Собеседник", own_label: str = "я",
-        own_sender: str | None = None,
+        own_sender: str | None = None, dialog: bool = False, peer_read: int | None = None,
     ) -> None:
         """``own_sender`` — логин аккаунта «Центра»: входящие с этим отправителем
         (собственные сообщения, отправленные из веба) рисуются как свои —
         с кобальтовым именем и кнопками ИЗМЕНИТЬ/УДАЛИТЬ."""
         # Пришло новое сообщение, а мы были внизу — доезжаем плавно, а не прыжком.
+        self.dialog_mode = dialog
+        self.peer_read = int(peer_read or 0)
         sb = self.verticalScrollBar()
         grew = 0 < self.count() < len(messages) and sb.value() >= sb.maximum() - 4
         prev = sb.value()
@@ -616,6 +746,11 @@ class ChatView(QListWidget):
             QTimer.singleShot(0, lambda: motion.smooth_scroll(sb, sb.maximum()))
         else:
             self.scrollToBottom()
+
+    def set_peer_read(self, wire_id: int | None) -> None:
+        """Собеседник прочитал до wire_id — перерисовать галочки без пересборки."""
+        self.peer_read = int(wire_id or 0)
+        self.viewport().update()
 
     def mouseMoveEvent(self, event) -> None:
         row = self.indexAt(event.position().toPoint()).row()

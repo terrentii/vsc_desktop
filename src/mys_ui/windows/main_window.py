@@ -8,7 +8,8 @@ import os
 import threading
 import time
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -28,6 +29,7 @@ from mys_ui.dialogs import common
 from mys_ui.dialogs.central import CentralLoginDialog
 from mys_ui.dialogs.phrase import PhraseDialog
 from mys_ui.dialogs.settings import SettingsDialog
+from mys_ui.widgets.brutal import BrutalButton
 from mys_ui.widgets.chat_view import ChatView
 from mys_ui.widgets.conversation_list import ConversationList
 from mys_ui.widgets.message_input import MessageInput
@@ -53,6 +55,9 @@ class _CentralBridge(QObject):
     media_ready = Signal(int)
     login_finished = Signal(bool)
     op_done = Signal(bool, str)  # правка/удаление сообщения: успех, текст ошибки
+    room_event = Signal(int, str, object)  # room_updated / typing / read / presence
+    avatar_ready = Signal(int)             # аватарка беседы докачана
+    invite_done = Signal(object, str)      # «Написать пользователю»: conv_id | None, ошибка
 
 
 class _P2PBridge(QObject):
@@ -82,6 +87,12 @@ class MainWindow(QWidget):
         # Сообщения, для которых автозагрузка картинки уже провалилась в этой
         # сессии приложения — не долбим сеть повторно на каждой перерисовке.
         self._media_fetch_failed: set[int] = set()
+        # «Центр»: аватарки (беседа, rev) → PNG; диалог: «печатает», отметки прочтения
+        self._avatars: dict[tuple[int, int], bytes | None] = {}
+        self._avatar_loading: set[tuple[int, int]] = set()
+        self._peer_typing_until = 0.0
+        self._last_typing_sent = 0.0
+        self._read_sent: dict[int, int] = {}
 
         # P2P «онлайн»/реконнект: online — есть ли прямо сейчас живая сессия
         # (обновляется по колбэкам connected/disconnected, в т.ч. автоматическим
@@ -145,6 +156,15 @@ class MainWindow(QWidget):
             on_message=lambda cid, lid: self._bridge.message.emit(cid, lid),
             on_state_change=lambda st: self._bridge.state.emit(st),
             on_error=lambda exc: self._bridge.error.emit(str(exc)),
+            on_room_event=lambda cid, kind, data: self._bridge.room_event.emit(cid, kind, data),
+        )
+        self._bridge.room_event.connect(self._on_room_event)
+        self._bridge.avatar_ready.connect(self._on_avatar_ready)
+        self._bridge.invite_done.connect(self._on_invite_done)
+        self.conversations.write_requested.connect(self._on_write_user)
+        self.input.field.textEdited.connect(self._on_input_typed)
+        QGuiApplication.instance().applicationStateChanged.connect(
+            lambda st: self._mark_read_current() if st == Qt.ApplicationActive else None
         )
 
         # Мост real-time децентрализованного (P2P) режима.
@@ -213,7 +233,34 @@ class MainWindow(QWidget):
         self._chat_badge = QLabel("")
         self._chat_badge.setObjectName("ChatBadge")
         hh.addWidget(self._chat_badge, 0, Qt.AlignVCenter)
+        self._btn_room_settings = BrutalButton("Настройки", "default", small=True)
+        self._btn_room_settings.clicked.connect(self._open_room_settings)
+        hh.addWidget(self._btn_room_settings, 0, Qt.AlignVCenter)
+        # аватарка комнаты — слева от названия («Центр»)
+        self._chat_avatar = QLabel()
+        self._chat_avatar.setFixedSize(52, 52)
+        hh.insertWidget(0, self._chat_avatar, 0, Qt.AlignVCenter)
         v.addWidget(self._chat_header)
+
+        # плашка «X предлагает диалог / приглашает: Принять — Отклонить»
+        self._invite_bar = QWidget()
+        self._invite_bar.setObjectName("ReplyBar")
+        self._invite_bar.setAttribute(Qt.WA_StyledBackground, True)
+        ib = QHBoxLayout(self._invite_bar)
+        ib.setContentsMargins(20, 8, 20, 8)
+        ib.setSpacing(10)
+        self._invite_text = QLabel()
+        self._invite_text.setObjectName("StatusMono")
+        self._invite_text.setWordWrap(True)
+        ib.addWidget(self._invite_text, 1)
+        self._btn_invite_accept = BrutalButton("Принять", "primary", small=True)
+        self._btn_invite_decline = BrutalButton("Отклонить", "default", small=True)
+        self._btn_invite_accept.clicked.connect(lambda: self._dialog_action("accept"))
+        self._btn_invite_decline.clicked.connect(lambda: self._dialog_action("decline"))
+        ib.addWidget(self._btn_invite_accept)
+        ib.addWidget(self._btn_invite_decline)
+        self._invite_bar.hide()
+        v.addWidget(self._invite_bar)
 
         # переключатель «пусто / чат»
         self._chat_stack = QStackedWidget()
@@ -376,7 +423,152 @@ class MainWindow(QWidget):
     # --- выбор/отправка/создание ----------------------------------------------
 
     def refresh_conversations(self) -> None:
-        self.conversations.populate(self._c.list_conversations())
+        rows = self._c.list_conversations()
+        if self._c.mode == CENTRALIZED:
+            enriched = []
+            for row in rows:
+                meta = self._c.central_room_meta(row["id"]) or {}
+                enriched.append(dict(
+                    row, central=True, title=meta.get("title") or row.get("title"),
+                    invited=meta.get("role") == "invited",
+                    avatar=self._avatar_for(row["id"], meta),
+                ))
+            rows = enriched
+        self.conversations.populate(rows)
+
+    # --- «Центр»: аватарки, диалоги, настройки комнаты --------------------------
+
+    def _avatar_for(self, conversation_id: int, meta: dict) -> bytes | None:
+        """Аватарка из кэша; нет — докачать в фоне (потом avatar_ready → перерисовка)."""
+        rev = int(meta.get("avatar_rev") or 0)
+        if rev == 0:
+            return None
+        key = (conversation_id, rev)
+        if key in self._avatars:
+            return self._avatars[key]
+        if key not in self._avatar_loading:
+            self._avatar_loading.add(key)
+
+            def work():
+                try:
+                    self._avatars[key] = self._c.central().avatar(conversation_id)
+                except Exception:
+                    self._avatars[key] = None
+                self._bridge.avatar_ready.emit(conversation_id)
+
+            threading.Thread(target=work, daemon=True).start()
+        return None
+
+    def _on_avatar_ready(self, conversation_id: int) -> None:
+        self.refresh_conversations()
+        if conversation_id == self._current:
+            self._update_chat_header()
+
+    def _current_meta(self) -> dict:
+        if self._current is None or self._c.mode != CENTRALIZED:
+            return {}
+        return self._c.central_room_meta(self._current) or {}
+
+    def _open_room_settings(self) -> None:
+        if self._current is None:
+            return
+        from mys_ui.dialogs.room_settings import RoomSettingsDialog
+        RoomSettingsDialog(self, self._c, self._current).exec()
+        if self._current is not None and self._c.central_room_meta(self._current) is None \
+                and not any(r["id"] == self._current for r in self._c.list_conversations()):
+            self._current = None  # комнаты больше нет (вышли/удалена)
+        self.refresh_conversations()
+        self._update_chat_header()
+        if self._current is not None:
+            self._show_messages(self._current)
+
+    def _dialog_action(self, action: str) -> None:
+        conv = self._current
+        if conv is None:
+            return
+
+        def work():
+            try:
+                res = self._c.central().room_call(conv, "dialog_action", action)
+                self._bridge.room_event.emit(conv, "room_updated" if res else "room_removed", {})
+            except Exception as exc:
+                self._bridge.error.emit(str(exc))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_write_user(self) -> None:
+        login, ok = common.ask_text(self, "Написать пользователю", "ЛОГИН")
+        if not ok or not login.strip():
+            return
+
+        def work():
+            try:
+                self._bridge.invite_done.emit(self._c.central().invite(login.strip()), "")
+            except Exception as exc:
+                self._bridge.invite_done.emit(None, str(exc))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_invite_done(self, conversation_id, error: str) -> None:
+        if conversation_id is None:
+            from mys_ui.dialogs.room_settings import ERRORS
+            common.warn(self, "Написать пользователю", ERRORS.get(error, error))
+            return
+        self.refresh_conversations()
+        self.conversations.select(conversation_id)
+        self._on_select(conversation_id)
+
+    def _on_room_event(self, conversation_id: int, kind: str, _data) -> None:
+        if kind in ("room_updated", "room_removed"):
+            if kind == "room_removed" and conversation_id == self._current:
+                self._current = None
+            self.refresh_conversations()
+            if conversation_id == self._current:
+                self._show_messages(conversation_id)
+                self._update_chat_header()
+        elif conversation_id == self._current:
+            if kind == "typing":
+                self._peer_typing_until = time.monotonic() + 5
+                QTimer.singleShot(5100, self._update_dialog_status)
+            elif kind == "read":
+                self.chat.set_peer_read(self._current_meta().get("peer_read"))
+            self._update_dialog_status()
+
+    def _update_dialog_status(self) -> None:
+        meta = self._current_meta()
+        if not meta.get("is_dialog"):
+            return
+        t = theme.tokens()
+        if time.monotonic() < self._peer_typing_until:
+            self._chat_online.setText("ПЕЧАТАЕТ…")
+            self._chat_online.setStyleSheet(f"color: {t['accent']};")
+            self._chat_online.show()
+        elif meta.get("peer_online"):
+            self._chat_online.setText("● В СЕТИ")
+            self._chat_online.setStyleSheet(f"color: {t['success']};")
+            self._chat_online.show()
+        else:
+            self._chat_online.hide()
+
+    def _on_input_typed(self, _text: str) -> None:
+        if not self._current_meta().get("is_dialog"):
+            return
+        now = time.monotonic()
+        if now - self._last_typing_sent > 3:
+            self._last_typing_sent = now
+            self._c.central().typing(self._current)
+
+    def _mark_read_current(self) -> None:
+        """Отметить прочитанным последнее входящее открытого диалога (окно активно)."""
+        meta = self._current_meta()
+        if not meta.get("is_dialog") or not self.isActiveWindow():
+            return
+        own = (self._c.central_session().username if self._c.central_session() else None)
+        wires = [r["wire_seq"] for r in self._c.list_messages(self._current)
+                 if r.get("wire_seq") and r["direction"] == "in" and r.get("sender") != own]
+        if wires and max(wires) > self._read_sent.get(self._current, 0):
+            self._read_sent[self._current] = max(wires)
+            self._c.central().mark_read(self._current, max(wires))
 
     def add_conversation(self, title: str) -> None:
         self._c.create_conversation(title)
@@ -406,10 +598,13 @@ class MainWindow(QWidget):
                 # Свои сообщения, отправленные из веба, приходят «входящими» с
                 # нашим логином — рисуем и управляем ими как своими.
                 own_label = own_sender = sess.username
+        meta = self._current_meta() if conversation_id == self._current else {}
         self.chat.show_messages(
             rows, peer_label=self._incoming_label(conversation_id),
             own_label=own_label, own_sender=own_sender,
+            dialog=bool(meta.get("is_dialog")), peer_read=meta.get("peer_read"),
         )
+        self._mark_read_current()
         # Автозагрузка картинок при открытии беседы (паритет с вебом — там это
         # обычный <img src=...>); обычные файлы остаются по требованию (клик).
         for row in rows:
@@ -592,10 +787,44 @@ class MainWindow(QWidget):
             self._chat_badge.setText("E2E · RATCHET")
             self._update_p2p_online_label()
         else:
+            meta = self._current_meta()
+            title = meta.get("title") or title
+            self._chat_name.setText(title)
             code = self._c.room_code(self._current)
-            self._chat_sub.setText(f"КОД {code}" if code else "ЦЕНТР")
+            if meta.get("is_dialog"):
+                self._chat_sub.setText("ДИАЛОГ")
+            else:
+                self._chat_sub.setText(f"КОД {code}" if code else "ЦЕНТР")
             self._chat_badge.setText("soufos.ru")
             self._chat_online.hide()
+            self._update_dialog_status()
+            from mys_ui.widgets.avatar import avatar_pixmap
+            self._chat_avatar.setPixmap(avatar_pixmap(self._avatar_for(self._current, meta), title, 52))
+            proposed = meta.get("dialog_proposed_by")
+            me = self._c.central_session().username if self._c.central_session() else None
+            if proposed and not meta.get("is_dialog"):
+                if proposed == me:
+                    self._invite_text.setText(
+                        f"Ждём, пока {meta.get('peer')} примет приглашение в диалог." if meta.get("pending_invite")
+                        else f"Вы предложили {meta.get('peer')} сделать комнату диалогом.")
+                    self._btn_invite_accept.hide()
+                    self._btn_invite_decline.setText("Отозвать")
+                else:
+                    what = "приглашает вас в диалог" if meta.get("role") == "invited" else "предлагает сделать комнату диалогом"
+                    self._invite_text.setText(f"{proposed} {what}.")
+                    self._btn_invite_accept.show()
+                    self._btn_invite_decline.setText("Отклонить")
+                self._invite_bar.show()
+            else:
+                self._invite_bar.hide()
+            # писать в приглашение до принятия нельзя (сервер всё равно отклонит)
+            self.input.setEnabled(not meta.get("pending_invite"))
+        is_central = self._c.mode == CENTRALIZED and self._c.central_session() is not None
+        self._btn_room_settings.setVisible(is_central)
+        self._chat_avatar.setVisible(is_central)
+        if self._c.mode == DECENTRALIZED:
+            self._invite_bar.hide()
+            self.input.setEnabled(True)
         self._chat_header.show()
         self._update_p2p_stack_page()
 

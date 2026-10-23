@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import httpx
 
 from .errors import AuthError, NetworkError, ProtocolError, ServerError
@@ -139,7 +141,63 @@ class RestClient:
             is_direct=bool(r.get("is_direct", False)),
             updated_at=r.get("updated_at"),
             code=r.get("code"),
+            meta=dict(r),
         )
+
+    # -- настройки комнат, диалоги, аватарки (vsc_web/dialogs.py) ----------
+
+    async def _call(self, method, path, *, json=None, files=None) -> dict:
+        return self._json(await self._request(method, path, json=json, files=files))
+
+    async def get_room(self, room_id: int) -> dict:
+        return await self._call("GET", f"/api/rooms/{room_id}")
+
+    async def update_room(self, room_id: int, name=None, is_open=None) -> dict:
+        body = {k: v for k, v in (("name", name), ("is_open", is_open)) if v is not None}
+        return await self._call("PATCH", f"/api/rooms/{room_id}", json=body)
+
+    async def add_member(self, room_id: int, login: str) -> dict:
+        return await self._call("POST", f"/api/rooms/{room_id}/members", json={"login": login})
+
+    async def remove_member(self, room_id: int, login: str) -> dict:
+        return await self._call("DELETE", f"/api/rooms/{room_id}/members/{quote(login, safe='')}")
+
+    async def leave_room(self, room_id: int) -> dict:
+        await self._request("POST", f"/api/rooms/{room_id}/leave")
+        return {"left": True}
+
+    async def dialog_action(self, room_id: int, action: str) -> dict:
+        return await self._call("POST", f"/api/rooms/{room_id}/dialog", json={"action": action})
+
+    async def invite(self, login: str) -> dict:
+        return await self._call("POST", "/api/dialogs", json={"login": login})
+
+    async def set_room_title(self, room_id: int, title: str) -> dict:
+        return await self._call("PATCH", f"/api/rooms/{room_id}/me", json={"title": title})
+
+    async def put_avatar(self, room_id: int, data: bytes) -> dict:
+        return await self._call("PUT", f"/api/rooms/{room_id}/avatar",
+                                files={"file": ("avatar", data, "application/octet-stream")})
+
+    async def delete_avatar(self, room_id: int) -> dict:
+        return await self._call("DELETE", f"/api/rooms/{room_id}/avatar")
+
+    async def get_avatar(self, room_id: int) -> bytes | None:
+        try:
+            return (await self._request("GET", f"/api/rooms/{room_id}/avatar")).content
+        except ServerError as exc:
+            if str(exc) == "not_found":
+                return None
+            raise
+
+    async def mark_read(self, room_id: int, message_id: int) -> None:
+        await self._request("POST", f"/api/rooms/{room_id}/read", json={"message_id": message_id})
+
+    async def me(self) -> dict:
+        return await self._call("GET", "/api/me")
+
+    async def set_me(self, **fields) -> dict:
+        return await self._call("PATCH", "/api/me", json=fields)
 
     async def get_messages(
         self, room_id: int, *, after: int | None = None, limit: int | None = None
