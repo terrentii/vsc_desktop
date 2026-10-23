@@ -276,6 +276,7 @@ class CentralizedService:
         self._rest = rest
         self._session = sess
         save_session(self._vault, sess)
+        self._vault.messages.claim_own("centralized", sess.username)
         self._sync = SyncEngine(
             self._vault, rest, on_message=self._dispatch_message,
             page_limit=self._page_limit, own_username=sess.username,

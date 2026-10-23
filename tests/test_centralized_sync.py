@@ -179,6 +179,38 @@ async def test_own_echo_without_client_id_deduped_by_body(vault):
     assert msgs[0]["wire_seq"] == 77 and msgs[0]["direction"] == "out"
 
 
+async def test_own_message_without_local_copy_is_outgoing(vault):
+    # Переустановка / другое устройство / веб: своё сообщение приходит с сервера,
+    # а локальной копии нет — всё равно исходящее, а не «чужое с тем же именем».
+    rest = FakeRest()
+    rest.rooms = [Room(id=1, name="g")]
+    eng = SyncEngine(vault, rest, own_username="me")
+    conv = (await eng.sync_rooms())[1]
+    await eng.ingest_ws({"type": "message", "room_id": 1, "id": 5, "sender": "me",
+                         "body": "старое", "created_at": "t"})
+    await eng.ingest_ws({"type": "message", "room_id": 1, "id": 6, "sender": "you",
+                         "body": "чужое", "created_at": "t"})
+    assert [(m["direction"], m["status"]) for m in vault.messages.list(conv)] == [
+        ("out", "sent"), ("in", "received")]
+
+
+async def test_claim_own_repairs_only_central_incoming(vault):
+    rest = FakeRest()
+    rest.rooms = [Room(id=1, name="g")]
+    eng = SyncEngine(vault, rest)  # как до исправления: без own_username
+    conv = (await eng.sync_rooms())[1]
+    p2p = vault.conversations.add(mode="decentralized", title="p")
+    await eng.ingest_ws({"type": "message", "room_id": 1, "id": 5, "sender": "me",
+                         "body": "моё", "created_at": "t"})
+    await eng.ingest_ws({"type": "message", "room_id": 1, "id": 6, "sender": "you",
+                         "body": "чужое", "created_at": "t"})
+    vault.messages.add(p2p, direction="in", body=b"x", status="received", sender="me")
+    vault.messages.claim_own("centralized", "me")
+    assert [m["direction"] for m in vault.messages.list(conv)] == ["out", "in"]
+    assert vault.messages.list(conv)[0]["sent_at"] is not None
+    assert vault.messages.list(p2p)[0]["direction"] == "in"
+
+
 async def test_identical_own_messages_not_collapsed(vault):
     # Два одинаковых исходящих не должны схлопнуться: каждое эхо линкуется со
     # старейшим неподтверждённым, после чего у него проставлен wire_seq.
