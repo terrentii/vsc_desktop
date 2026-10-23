@@ -14,9 +14,8 @@ from collections.abc import Callable
 
 from .handshake import handshake
 from .protocol import Role, derive_room_params
-from .rendezvous import RendezvousClient
+from .mesh_path import pair
 from .session import Session, open_session
-from .transport import RelayTransport
 
 OnMessage = Callable[[int, bytes], None]
 OnStateChange = Callable[[int, str], None]
@@ -49,6 +48,7 @@ class P2PService:
         on_error: OnError | None = None,
         connect_timeout: float = 300.0,
         direct_factory=None,
+        mesh_factory=None,
     ):
         """``direct_factory`` — фабрика DirectLink (WebRTC, см. :mod:`.webrtc`);
         None — только relay. Состояния пути — ``on_state_change(cid, "direct"|"relay")``."""
@@ -61,6 +61,11 @@ class P2PService:
         self._connect_timeout = connect_timeout
         self._direct_factory = direct_factory
         self._links: dict = {}
+        # mesh_factory() → (MeshNode, MeshInternet|None), зовётся в потоке сервиса;
+        # None — без mesh (только сервер)
+        self._mesh_factory = mesh_factory
+        self.mesh = None
+        self.mesh_net = None
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -78,6 +83,21 @@ class P2PService:
         )
         self._thread.start()
         self._ready.wait()
+        if self._mesh_factory is not None:
+            self._submit(self._start_mesh(), timeout=10.0)
+
+    async def _start_mesh(self) -> None:
+        self.mesh, self.mesh_net = self._mesh_factory()
+        if self.mesh_net is not None:
+            self.mesh_net.start()
+
+    def mesh_stats(self) -> dict | None:
+        """Состояние mesh для UI: соседи, маршруты, переслано, линки к узлам."""
+        if self.mesh is None:
+            return None
+        stats = dict(self.mesh.stats())
+        stats["nodes"] = self.mesh_net.connected() if self.mesh_net is not None else []
+        return stats
 
     def _run_loop(self) -> None:
         self._loop = asyncio.new_event_loop()
@@ -109,6 +129,10 @@ class P2PService:
         self._ready.clear()
 
     async def _shutdown(self) -> None:
+        if self.mesh_net is not None:
+            await self.mesh_net.stop()
+        if self.mesh is not None:
+            await self.mesh.close()
         for link in list(self._links.values()):
             link.close()
         self._links.clear()
@@ -222,12 +246,11 @@ class P2PService:
         role = None
         try:
             # Кандидатов не анонсируем: прямой путь — WebRTC поверх готовой сессии.
-            rv = await RendezvousClient(self._rendezvous_url).join(room_id, [], timeout=wait)
-            role = rv.role
-            transport = RelayTransport.from_rendezvous(rv)
+            role, transport, path, rv = await pair(self._rendezvous_url, self.mesh, room_id, prs, wait)
 
             result = await handshake(transport, prs, role)
-            link = self._direct_factory() if self._direct_factory is not None else None
+            # прямой WebRTC сигналит через relay-сервер — поверх mesh его не поднимаем
+            link = self._direct_factory() if self._direct_factory is not None and path == "relay" else None
             session = open_session(
                 self._vault, conv_id, transport, result.sk, result.ratchet_state,
                 on_message=lambda body, _cid=conv_id: self._on_message(_cid, body),
@@ -249,6 +272,8 @@ class P2PService:
                 except Exception:
                     pass
             self._on_state_change(conv_id, "connected")
+            if path == "mesh":
+                self._on_state_change(conv_id, "mesh")
         except Exception as exc:
             # Провал хендшейка/сети: закрыть всё, что успели открыть, иначе
             # утёкшее соединение держит rendezvous-сервер (wait_closed зависнет).

@@ -101,7 +101,7 @@ class MainWindow(QWidget):
         # banner_dismissed_for — беседа, для которой в ЭТОМ визите нажали
         # «прочитать переписку» (плашка снова появится при следующем входе).
         self._p2p_online: dict[int, bool] = {}
-        self._p2p_direct: dict[int, bool] = {}  # путь: True — WebRTC
+        self._p2p_direct: dict[int, str] = {}  # путь: direct (WebRTC) / relay / mesh
         self._p2p_connecting: dict[int, float] = {}
         self._p2p_banner_dismissed_for: int | None = None
 
@@ -833,7 +833,8 @@ class MainWindow(QWidget):
         online = self._p2p_online.get(self._current, False)
         t = theme.tokens()
         if online:
-            path = "НАПРЯМУЮ" if self._p2p_direct.get(self._current) else "ЧЕРЕЗ СЕРВЕР"
+            path = {"direct": "НАПРЯМУЮ", "mesh": "ЧЕРЕЗ MESH"}.get(
+                self._p2p_direct.get(self._current), "ЧЕРЕЗ СЕРВЕР")
             self._chat_online.setText(f"● В СЕТИ · {path}")
             self._chat_online.setStyleSheet(f"color: {t['success']};")
         else:
@@ -977,10 +978,11 @@ class MainWindow(QWidget):
         elif state == "disconnected":
             self._p2p_online[conversation_id] = False
             self._p2p_direct.pop(conversation_id, None)
-        elif state in ("direct", "relay"):  # путь канала (WebRTC / через сервер)
-            self._p2p_direct[conversation_id] = state == "direct"
+        elif state in ("direct", "relay", "mesh"):  # путь канала (WebRTC / сервер / mesh)
+            self._p2p_direct[conversation_id] = state
         if conversation_id == self._current:
-            self._set_status({"direct": "Прямой канал", "relay": "Через сервер"}.get(state, state))
+            self._set_status({"direct": "Прямой канал", "relay": "Через сервер",
+                              "mesh": "Через mesh-сеть"}.get(state, state))
             if self._c.mode == DECENTRALIZED:
                 # Обновляет точку «онлайн»; если чат сейчас читают (плашка уже
                 # отпущена в этом визите — см. _p2p_banner_dismissed_for), живой

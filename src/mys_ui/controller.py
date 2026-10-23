@@ -294,6 +294,11 @@ class AppController:
     def _central_on_error(self, exc: Exception) -> None:
         self._notify("error", exc)
 
+    def p2p_mesh_stats(self) -> dict | None:
+        """Состояние mesh (соседи, маршруты, узлы) или None — mesh не запущен."""
+        svc = self._service
+        return svc.mesh_stats() if svc is not None and hasattr(svc, "mesh_stats") else None
+
     def central(self):
         """Сервис «Центра» (настройки комнат, диалоги, аватарки — его методы)."""
         return self._ensure_central()

@@ -63,6 +63,9 @@ class RendezvousClient:
             raise PeerUnavailable("пир не вошёл в комнату за отведённый таймаут")
         except ConnectionClosed as exc:
             raise RendezvousError("соединение с rendezvous-сервером оборвалось") from exc
+        except asyncio.CancelledError:
+            await ws.close()  # выбран другой путь (mesh) — уйти из комнаты на сервере
+            raise
 
         msg, _consumed = decode_message(message)
         if not isinstance(msg, Pair):

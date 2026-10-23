@@ -44,11 +44,35 @@ def _direct_factory():
     return lambda: WebRtcLink(ice)
 
 
+def _mesh_factory(vault):
+    """Mesh-узел + связь с публичными узлами; None — mesh выключен в настройках.
+
+    Стартовый узел — тот же сервер, что и rendezvous (…/p2p → …/mesh): домен
+    сменится — адрес не хардкодится; свои узлы добавляются в настройках."""
+    from mys_mesh import prefs as mesh_prefs
+    from mys_mesh.internet import MeshInternet
+    from mys_mesh.node import MeshConfig, MeshNode
+
+    p = mesh_prefs.load(vault)
+    if not p.enabled:
+        return None
+    bootstrap = [_RENDEZVOUS_URL.rsplit("/", 1)[0] + "/mesh", *p.nodes]
+
+    def make():
+        node = MeshNode(MeshConfig(relay=p.relay))
+        node.learn_urls(p.peers)
+        node.on_peers = lambda _fresh: mesh_prefs.save_peers(vault, node.known_urls)
+        return node, MeshInternet(node, lambda: bootstrap)
+
+    return make
+
+
 def _p2p_factory(vault, *, on_message, on_state_change, on_error):
     return P2PService(
         vault,
         _RENDEZVOUS_URL,
         direct_factory=_direct_factory(),
+        mesh_factory=_mesh_factory(vault),
         on_message=on_message,
         on_state_change=on_state_change,
         on_error=on_error,
