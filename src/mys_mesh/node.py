@@ -41,6 +41,8 @@ class MeshConfig:
     relay_rate: float = 256 * 1024
     sweep: float = 5.0
     clock: Callable[[], float] = time.time
+    # Публичный узел (сервер): свой адрес wss://…/mesh — сообщается соседям в PEERS
+    public_url: str | None = None
 
 
 class _Bucket:
@@ -89,6 +91,10 @@ class MeshNode:
         self._rreq_forwarded = 0
         self._tasks: set[asyncio.Task] = set()
         self._sweeper: asyncio.Task | None = None
+        self._closed: dict[int, asyncio.Future] = {}
+        # адреса публичных узлов: свой (если есть) + выученные из PEERS
+        self.known_urls: list[str] = [self.config.public_url] if self.config.public_url else []
+        self.on_peers: Callable[[list[str]], None] | None = None  # выучили новые адреса
 
     # -- соседи ------------------------------------------------------------
 
@@ -98,9 +104,24 @@ class MeshNode:
         self._next += 1
         self._links[nid] = link
         self._rreq_buckets[nid] = _Bucket(self.config.rreq_rate)
+        self._closed[nid] = asyncio.get_running_loop().create_future()
         self._spawn(self._read_loop(nid, link))
         self._ensure_sweeper()
+        if self.known_urls:  # поделиться адресами публичных узлов
+            await self._send(nid, P.encode(P.Packet(P.PEERS, os.urandom(P.ID_LEN),
+                                                    payload=P.encode_peers(self.known_urls))))
         return nid
+
+    async def serve(self, wire: Wire) -> None:
+        """Подключить провод и держать, пока линк жив (для серверов и менеджеров связи)."""
+        nid = await self.attach(wire)
+        await asyncio.shield(self._closed[nid])
+
+    def learn_urls(self, urls: list[str]) -> list[str]:
+        """Добавить адреса публичных узлов; → новые (не больше 32 всего)."""
+        fresh = [u for u in urls if u not in self.known_urls]
+        self.known_urls = (self.known_urls + fresh)[:32]
+        return [u for u in fresh if u in self.known_urls]
 
     async def detach(self, nid: int) -> None:
         link = self._links.get(nid)
@@ -166,6 +187,10 @@ class MeshNode:
             await self._on_rrep(nid, p)
         elif p.type == P.DATA:
             await self._on_data(nid, p, raw)
+        elif p.type == P.PEERS:  # только между соседями, дальше не идёт
+            fresh = self.learn_urls(P.decode_peers(p.payload))
+            if fresh and self.on_peers is not None:
+                self.on_peers(fresh)
         else:
             await self._on_rerr(nid, p, raw)
 
@@ -243,6 +268,9 @@ class MeshNode:
     async def _drop_neighbor(self, nid: int) -> None:
         link = self._links.pop(nid, None)
         self._rreq_buckets.pop(nid, None)
+        closed = self._closed.pop(nid, None)
+        if closed is not None and not closed.done():
+            closed.set_result(None)
         if link is not None:
             await link.close()
         for rid, r in list(self._routes.items()):

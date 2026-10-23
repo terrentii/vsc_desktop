@@ -59,6 +59,45 @@ class MemoryWire(Wire):
             self._inbox.put_nowait(_CLOSED)
 
 
+class WsWire(Wire):
+    """Провод через WebSocket (wss://…/mesh): одно бинарное сообщение = один кадр.
+
+    Интернет-линк к публичному узлу: проходит прокси и NAT как обычный HTTPS."""
+
+    def __init__(self, ws):
+        self._ws = ws
+
+    @classmethod
+    async def connect(cls, url: str, *, open_timeout: float = 60.0) -> "WsWire":
+        from websockets.asyncio.client import connect
+        try:
+            ws = await connect(url, max_size=MAX_FRAME, open_timeout=open_timeout, ping_interval=20)
+        except Exception as e:  # DNS, отказ, TLS, таймаут — для менеджера связи одно и то же
+            raise WireClosed(f"{url}: {e}") from e
+        return cls(ws)
+
+    async def send(self, frame: bytes) -> None:
+        try:
+            await self._ws.send(bytes(frame))
+        except Exception as e:
+            raise WireClosed(str(e)) from e
+
+    async def recv(self) -> bytes:
+        try:
+            msg = await self._ws.recv()
+        except Exception as e:
+            raise WireClosed(str(e)) from e
+        if isinstance(msg, str) or len(msg) > MAX_FRAME:
+            raise WireClosed("не бинарный кадр или больше MAX_FRAME")
+        return msg
+
+    async def close(self) -> None:
+        try:
+            await self._ws.close()
+        except Exception:
+            pass
+
+
 class TcpWire(Wire):
     """Кадры ``u32be длина ‖ байты`` поверх TCP."""
 
@@ -88,7 +127,7 @@ class TcpWire(Wire):
 
     async def close(self) -> None:
         self._w.close()
-        try:
-            await self._w.wait_closed()
-        except (ConnectionError, OSError):
+        try:  # мёртвый сосед не должен подвешивать остановку
+            await asyncio.wait_for(self._w.wait_closed(), 2.0)
+        except (ConnectionError, OSError, asyncio.TimeoutError):
             pass

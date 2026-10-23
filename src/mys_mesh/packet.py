@@ -3,12 +3,14 @@
 from dataclasses import dataclass
 
 VERSION = 1
-RREQ, RREP, DATA, RERR = 1, 2, 3, 4
+RREQ, RREP, DATA, RERR, PEERS = 1, 2, 3, 4, 5
 ID_LEN, TAG_LEN, NONCE_LEN = 16, 32, 16
 HEADER_LEN = 4 + ID_LEN
 MAX_DATA = 65_600
 MAX_PACKET = HEADER_LEN + MAX_DATA
 TTL_MAX = 8
+PEERS_MAX = 16      # адресов в одном PEERS
+PEER_URL_MAX = 200  # байт на адрес
 
 
 class MeshProtocolError(Exception):
@@ -32,7 +34,7 @@ def encode(p: Packet) -> bytes:
         body = p.tag + p.nonce
     elif p.type == RREP:
         body = p.route_id + p.nonce
-    elif p.type == DATA:
+    elif p.type in (DATA, PEERS):
         body = p.payload
     else:
         body = b""
@@ -62,4 +64,32 @@ def decode(raw: bytes, ttl_max: int = TTL_MAX) -> Packet:
         if body:
             raise MeshProtocolError("RERR с телом")
         return Packet(RERR, pid, 0, hops)
+    if ptype == PEERS:
+        decode_peers(body)  # проверка формата
+        return Packet(PEERS, pid, 0, hops, payload=body)
     raise MeshProtocolError("неизвестный тип")
+
+
+def encode_peers(urls: list[str]) -> bytes:
+    """Адреса публичных узлов (wss://…) для пакета PEERS: строки через \\n."""
+    keep = [u for u in urls if _valid_url(u.encode("utf-8"))][:PEERS_MAX]
+    return "\n".join(keep).encode("utf-8")
+
+
+def decode_peers(body: bytes) -> list[str]:
+    if not body:
+        return []
+    parts = body.split(b"\n")
+    if len(parts) > PEERS_MAX or not all(_valid_url(p) for p in parts):
+        raise MeshProtocolError("неверный PEERS")
+    return [p.decode("utf-8") for p in parts]
+
+
+def _valid_url(raw: bytes) -> bool:
+    if not 0 < len(raw) <= PEER_URL_MAX or not raw.startswith((b"wss://", b"ws://")):
+        return False
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return text.isprintable() and " " not in text

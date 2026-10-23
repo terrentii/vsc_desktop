@@ -75,11 +75,45 @@ class SettingsDialog(FramelessDialog):
             self.btn_logout.clicked.connect(self._logout)
             layout.addWidget(self.btn_logout, 0, Qt.AlignLeft)
 
+        # --- mesh-сеть: P2P-каналы через соседние узлы, если сервер недоступен ---
+        if self._c.vault is not None:
+            from mys_mesh import prefs as mesh_prefs
+            mp = mesh_prefs.load(self._c.vault)
+            layout.addSpacing(8)
+            layout.addWidget(self._sep())
+            layout.addWidget(self._section("MESH-СЕТЬ"))
+            self.mesh_enabled = BrutalCheckBox("Mesh-сеть: каналы через другие узлы МЫС")
+            self.mesh_enabled.setChecked(mp.enabled)
+            self.mesh_relay = BrutalCheckBox("Пересылать чужие зашифрованные сообщения")
+            self.mesh_relay.setChecked(mp.relay)
+            self.mesh_nodes = BrutalLineEdit(" ".join(mp.nodes))
+            self.mesh_nodes.setPlaceholderText("Свои узлы: wss://адрес/mesh через пробел")
+            for w in (self.mesh_enabled, self.mesh_relay):
+                w.toggled.connect(self._save_mesh)
+            self.mesh_nodes.editingFinished.connect(self._save_mesh)
+            layout.addWidget(self.mesh_enabled)
+            layout.addWidget(self.mesh_relay)
+            layout.addWidget(self.mesh_nodes)
+            stats = self._c.p2p_mesh_stats()
+            text = ("Mesh не запущен." if stats is None else
+                    f"Узлов в интернете: {len(stats['nodes'])} · соседей: {stats['neighbors']} · "
+                    f"маршрутов: {stats['routes']} · переслано для других: {stats['relayed_bytes'] // 1024} КБ")
+            hint = QLabel(text + "\nИзменения вступят в силу после блокировки и входа.")
+            hint.setObjectName("StatusMono")
+            hint.setWordWrap(True)
+            layout.addWidget(hint)
+
         layout.addSpacing(12)
         layout.addWidget(self._sep())
         done = BrutalButton("Готово", "primary", small=True)
         done.clicked.connect(self.accept)
         layout.addWidget(done, 0, Qt.AlignRight)
+
+    def _save_mesh(self, *_args) -> None:
+        from mys_mesh import prefs as mesh_prefs
+        nodes = [u for u in self.mesh_nodes.text().replace(",", " ").split() if u.startswith(("wss://", "ws://"))]
+        mesh_prefs.save(self._c.vault, mesh_prefs.MeshPrefs(
+            enabled=self.mesh_enabled.isChecked(), relay=self.mesh_relay.isChecked(), nodes=nodes))
 
     def _label(self, text: str) -> QLabel:
         lbl = QLabel(text)
