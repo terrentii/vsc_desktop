@@ -269,7 +269,8 @@ class SyncEngine:
                 if pending["wire_seq"] is None:
                     self._vault.messages.mark_sent(pending["id"], wire_seq=msg.id)
                 return None
-        if self._own_username is not None and msg.sender == self._own_username:
+        own = self._own_username is not None and msg.sender == self._own_username
+        if own:
             # Эхо собственного сообщения, в котором сервер не вернул client_msg_id
             # (WS-кадр): связываем по телу с неподтверждённым исходящим, иначе
             # получили бы дубликат-«входящее» из-за гонки POST-ответа и WS-эха.
@@ -278,12 +279,15 @@ class SyncEngine:
             if pending is not None:
                 self._vault.messages.mark_sent(pending["id"], wire_seq=msg.id)
                 return None
+        # Своё сообщение без локальной копии (другое устройство, веб,
+        # переустановка) — тоже исходящее.
+        direction, status = ("out", "sent") if own else ("in", "received")
         when = _epoch_of(msg.created_at)
         reply = msg.reply or {}
         if msg.media:
             filename = media.display_name(msg.media)
             local_id = self._vault.messages.add(
-                conv_id, direction="in", body=None, status="received", wire_seq=msg.id,
+                conv_id, direction=direction, body=None, status=status, wire_seq=msg.id,
                 sender=msg.sender, kind=media.kind_for_filename(msg.media),
                 filename=filename, mime_type=mimetypes.guess_type(filename)[0],
                 media_ref=msg.media, timestamp=when,
@@ -291,8 +295,8 @@ class SyncEngine:
             )
         else:
             local_id = self._vault.messages.add(
-                conv_id, direction="in", body=msg.body.encode("utf-8"),
-                status="received", wire_seq=msg.id, sender=msg.sender,
+                conv_id, direction=direction, body=msg.body.encode("utf-8"),
+                status=status, wire_seq=msg.id, sender=msg.sender,
                 timestamp=when,
                 reply_author=reply.get("sender"), reply_snippet=reply.get("body"),
             )

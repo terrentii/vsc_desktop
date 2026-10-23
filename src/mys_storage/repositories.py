@@ -197,6 +197,18 @@ class MessagesRepo(_Base):
         cur.row_factory = _row_factory
         return cur.fetchone()
 
+    def claim_own(self, mode: str, sender: str) -> None:
+        """Свои сообщения, сохранённые входящими (до переустановки, из веба), —
+        в исходящие. Логин на сервере уникален, так что отправитель однозначен."""
+        self._c.execute(
+            "UPDATE messages SET direction='out', status='sent',"
+            " sent_at=COALESCE(sent_at, received_at)"
+            " WHERE direction='in' AND sender=?"
+            " AND conversation_id IN (SELECT id FROM conversations WHERE mode=?)",
+            (sender, mode),
+        )
+        self._c.commit()
+
     def find_unconfirmed_out_by_body(self, conversation_id, body):
         """Старейшее исходящее с таким телом, ещё не получившее серверный id.
 
