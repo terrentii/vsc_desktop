@@ -309,3 +309,22 @@ def test_p2p_service_unavailable_warns_instead_of_crashing(qtbot, tmp_path, monk
     assert warned  # предупреждение показано, а не исключение наружу
     assert w._current is None
     c.lock()
+
+
+def test_p2p_incoming_author_is_peer_until_renamed(qtbot, tmp_path):
+    """Входящие в P2P подписаны «Собеседник» (как на телефоне), а не «Диалог N»;
+    после переименования канала — его названием."""
+    from mys_ui.widgets.chat_view import _AUTHOR_ROLE
+
+    c = _ready(tmp_path)
+    c.set_mode(DECENTRALIZED)
+    conv = c.vault.conversations.add(mode=DECENTRALIZED, room_id=b"r")
+    c.vault.messages.add(conv, direction="in", body="привет".encode(), status="received")
+    w = MainWindow(c)
+    qtbot.addWidget(w)
+    w._on_select(conv)
+    assert w.chat.item(0).data(_AUTHOR_ROLE) == "Собеседник"
+    c.vault.conversations.rename(conv, "Алиса")
+    w._on_select(conv)
+    assert w.chat.item(0).data(_AUTHOR_ROLE) == "Алиса"
+    c.lock()
