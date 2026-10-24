@@ -383,6 +383,15 @@ QLineEdit[brutal="true"] {{
 }}
 QLineEdit[brutal="true"]:focus {{ border: 2px solid {t['line']}; }}
 QLineEdit#MsgField {{ font-size: 20px; }}
+/* многострочное поле сообщения: рамка как у BrutalLineEdit, тень — подложка _ShadowBox */
+QPlainTextEdit#MsgField {{
+    background: {t['field']};
+    color: {t['text']};
+    border: 2px solid {t['line']};
+    padding: 7px 12px;
+    font-size: 20px;
+    selection-background-color: {t['accent']};
+}}
 QLabel#ReplyLabel {{
     color: {t['text3']};
     font-family: {FONT_MONO};
