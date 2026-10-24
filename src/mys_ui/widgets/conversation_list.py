@@ -114,7 +114,7 @@ class ConversationList(QWidget):
         from mys_ui.widgets.avatar import avatar_pixmap
         for c in conversations:
             title = c["title"] or f"Диалог {c['id']}"
-            label = f"{title}  · приглашение" if c.get("invited") else title
+            label = f"{title}  · приглашение" if c.get("invited") else (f"{title}  · черновик" if c.get("draft") else title)
             item = QListWidgetItem(label)
             if c.get("central"):
                 item.setIcon(QtGui.QIcon(avatar_pixmap(c.get("avatar"), title, 68)))
@@ -125,6 +125,10 @@ class ConversationList(QWidget):
             if c["id"] == self._selected_id:
                 self.list.setCurrentItem(item)  # не эмитит itemClicked
         self.count.setText(str(len(conversations)))
+
+    def ids(self) -> list[int]:
+        """Беседы в порядке списка (для перехода Alt+↑/↓)."""
+        return [self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())]
 
     def select(self, conversation_id: int | None) -> None:
         """Программно отметить выбранную беседу (или сбросить, None)."""

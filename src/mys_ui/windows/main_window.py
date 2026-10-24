@@ -9,7 +9,7 @@ import threading
 import time
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QImage, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -32,7 +32,7 @@ from mys_ui.dialogs.settings import SettingsDialog
 from mys_ui.widgets.brutal import BrutalButton
 from mys_ui.widgets.chat_view import ChatView
 from mys_ui.widgets.conversation_list import ConversationList
-from mys_ui.widgets.message_input import MessageInput
+from mys_ui.widgets.message_input import MessageInput, local_paths
 from mys_ui.widgets.p2p_banner import P2POfflineBanner
 from mys_ui.widgets.top_bar import TopBar
 
@@ -81,6 +81,8 @@ class MainWindow(QWidget):
         self._current: int | None = None
         # Активный «ответ на…»: {"wire","sender","snippet"} для следующей отправки.
         self._reply: dict | None = None
+        # Черновики: беседа → неотправленный текст (живут, пока открыто хранилище)
+        self._drafts: dict[int, str] = {}
         self._central_error: str | None = None
         self._central_state: str | None = None
         self._pending_fetches: set[int] = set()
@@ -142,6 +144,18 @@ class MainWindow(QWidget):
         self.chat.edit_requested.connect(self._on_edit_requested)
         self.chat.delete_requested.connect(self._on_delete_requested)
         self.input.reply_cancelled.connect(self._on_reply_cancelled)
+        self.input.files_submitted.connect(self._on_attach)
+        self.input.image_pasted.connect(lambda img: self._on_attach([img]))
+        self.input.close_requested.connect(self._close_chat)
+        self.input.edit_last_requested.connect(self._edit_last_own)
+        # Перетаскивание файлов в любое место окна чата
+        self.setAcceptDrops(True)
+        # Переход между чатами, как в Telegram Desktop
+        for keys, step in (("Alt+Down", 1), ("Alt+Up", -1), ("Ctrl+Tab", 1), ("Ctrl+Shift+Tab", -1),
+                           ("Ctrl+PgDown", 1), ("Ctrl+PgUp", -1)):
+            sc = QShortcut(QKeySequence(keys), self)
+            sc.setContext(Qt.WindowShortcut)
+            sc.activated.connect(lambda s=step: self._step_chat(s))
 
         # Мост real-time централизованного режима.
         self._bridge = _CentralBridge()
@@ -162,7 +176,7 @@ class MainWindow(QWidget):
         self._bridge.avatar_ready.connect(self._on_avatar_ready)
         self._bridge.invite_done.connect(self._on_invite_done)
         self.conversations.write_requested.connect(self._on_write_user)
-        self.input.field.textEdited.connect(self._on_input_typed)
+        self.input.text_edited.connect(self._on_input_typed)
         QGuiApplication.instance().applicationStateChanged.connect(
             lambda st: self._mark_read_current() if st == Qt.ApplicationActive else None
         )
@@ -338,6 +352,7 @@ class MainWindow(QWidget):
 
     def _on_mode(self, mode: str) -> None:
         prefs.save_mode(mode)  # режим переживает перезапуск
+        self._swap_draft(None)
         self._c.set_mode(mode)
         self._current = None
         self.chat.clear()
@@ -434,6 +449,7 @@ class MainWindow(QWidget):
                     avatar=self._avatar_for(row["id"], meta),
                 ))
             rows = enriched
+        rows = [dict(r, draft=bool(self._drafts.get(r["id"], "").strip())) for r in rows]
         self.conversations.populate(rows)
 
     # --- «Центр»: аватарки, диалоги, настройки комнаты --------------------------
@@ -617,6 +633,7 @@ class MainWindow(QWidget):
     def _on_select(self, conversation_id: int) -> None:
         if self._current != conversation_id:
             self.input.clear_reply()  # «ответ на…» не переносится между беседами
+            self._swap_draft(conversation_id)
             motion.fade_in(self.chat, 160)
         self._current = conversation_id
         # Плашка «собеседник офлайн» должна появляться заново при каждом входе
@@ -996,7 +1013,82 @@ class MainWindow(QWidget):
 
     # --- отправка/сохранение файлов (P2P + «Центр») ------------------------------
 
-    def _on_send_file(self, path: str) -> None:
+    # --- поведение Telegram Desktop: вложения, черновики, клавиши ----------------
+
+    def dragEnterEvent(self, e) -> None:
+        md = e.mimeData()
+        if self._current is not None and (local_paths(md) or md.hasImage()):
+            e.acceptProposedAction()
+
+    def dropEvent(self, e) -> None:
+        md = e.mimeData()
+        paths = local_paths(md)
+        if paths:
+            self._on_attach(paths)
+        elif md.hasImage():
+            self._on_attach([QImage(md.imageData())])
+        e.acceptProposedAction()
+
+    def _on_attach(self, items: list) -> None:
+        """Перетащили / вставили: предпросмотр → отправка по одному."""
+        from mys_ui.dialogs.attach import AttachDialog, image_png
+
+        items = [i for i in items if not (isinstance(i, QImage) and i.isNull())
+                 and (isinstance(i, QImage) or os.path.isfile(i))]
+        if self._current is None or not items:
+            return
+        if AttachDialog(items, self).exec() != QDialog.Accepted:
+            return
+        stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+        for n, item in enumerate(items):
+            if isinstance(item, QImage):
+                suffix = f"-{n + 1}" if len(items) > 1 else ""
+                self._on_send_file((f"изображение_{stamp}{suffix}.png", image_png(item)))
+            else:
+                self._on_send_file(item)
+
+    def _swap_draft(self, new_id: int | None) -> None:
+        """Сохранить текст текущей беседы и подставить черновик новой."""
+        if self._current is not None:
+            text = self.input.text()
+            if text.strip():
+                self._drafts[self._current] = text
+            else:
+                self._drafts.pop(self._current, None)
+        self.input.set_text(self._drafts.get(new_id, "") if new_id is not None else "")
+        self.refresh_conversations()
+
+    def _close_chat(self) -> None:
+        """Esc в пустом поле — закрыть чат, как в Telegram."""
+        if self._current is None:
+            return
+        self._swap_draft(None)
+        self._current = None
+        self.chat.clear()
+        self.conversations.select(None)
+        self._update_chat_header()
+
+    def _edit_last_own(self) -> None:
+        """↑ в пустом поле — изменить своё последнее текстовое сообщение («Центр»)."""
+        if self._current is None or self._c.mode != CENTRALIZED or not self.chat.actions_enabled:
+            return
+        for row in reversed(self._c.list_messages(self._current)):
+            if self._is_own_row(row) and row.get("kind", "text") == "text" and row.get("wire_seq"):
+                self._on_edit_requested(row["id"])
+                return
+
+    def _step_chat(self, step: int) -> None:
+        """Alt+↑/↓, Ctrl+Tab — соседняя беседа в списке (по кругу)."""
+        ids = self.conversations.ids()
+        if not ids:
+            return
+        i = ids.index(self._current) + step if self._current in ids else (0 if step > 0 else -1)
+        target = ids[i % len(ids)]
+        self.conversations.select(target)
+        self._on_select(target)
+        self.input.field.setFocus()
+
+    def _on_send_file(self, path) -> None:
         if self._current is None:
             return
         conversation_id = self._current
@@ -1017,15 +1109,21 @@ class MainWindow(QWidget):
             return
         self._set_status("Отправка файла…")
 
-    def _send_file_worker(self, conversation_id: int, path: str) -> None:
+    @staticmethod
+    def _load_source(source) -> tuple[str, bytes]:
+        """Вложение → (имя, байты): путь к файлу или (имя, байты) из буфера."""
+        if isinstance(source, tuple):
+            return source
+        with open(source, "rb") as fh:
+            return os.path.basename(source), fh.read()
+
+    def _send_file_worker(self, conversation_id: int, path) -> None:
         try:
-            with open(path, "rb") as fh:
-                data = fh.read()
+            filename, data = self._load_source(path)
             if len(data) > filetransfer.MAX_FILE_SIZE:
                 raise ValueError(
                     f"Файл больше {filetransfer.MAX_FILE_SIZE // (1024 * 1024)} МБ"
                 )
-            filename = os.path.basename(path)
             mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
             self._c.send_file(conversation_id, filename, mime, data)
         except Exception as exc:
@@ -1033,15 +1131,13 @@ class MainWindow(QWidget):
             return
         self._p2p_bridge.file_sent.emit(conversation_id)
 
-    def _send_central_file_worker(self, conversation_id: int, path: str) -> None:
+    def _send_central_file_worker(self, conversation_id: int, path) -> None:
         from mys_centralized import media
 
         try:
-            filename = os.path.basename(path)
+            filename, data = self._load_source(path)
             media.validate_extension(filename)
             mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-            with open(path, "rb") as fh:
-                data = fh.read()
             if len(data) > media.MAX_MEDIA_SIZE:
                 raise ValueError(f"Файл больше {media.MAX_MEDIA_SIZE // (1024 * 1024)} МБ")
             self._c.send_file(conversation_id, filename, mime, data)
